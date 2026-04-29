@@ -1,3 +1,5 @@
+import re
+
 import sympy as sp
 from sympy.parsing.sympy_parser import parse_expr
 
@@ -21,4 +23,4 @@ def d_dt(expr_str: str) -> str:
 def repl_symbol(expr: str, sym: str, repl: str) -> str:
     # replace only standalone symbols (no part of identifiers like 'exp', 'max')
     pattern = rf'(?<![A-Za-z0-9_]){sym}(?![A-Za-z0-9_])'
-    return sp.re.sub(pattern, repl, expr)
+    return re.sub(pattern, repl, expr)

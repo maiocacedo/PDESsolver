@@ -1,11 +1,12 @@
 from matplotlib.animation import FuncAnimation
-
-from Auxs.FuncAux import symbol_references
 from Disc.Disc import df
-import Solvers.CN as CN
+from Solvers.CN import cn
 import Solvers.RKF as SERKF45
+from Solvers.bdf2 import bdf2
 import sympy as sp
 import numpy as np
+import matplotlib
+matplotlib.use('TkAgg')  # ou 'Qt5Agg'
 import matplotlib.pyplot as plt
 
 
@@ -94,31 +95,40 @@ class PDES:
         
         self.disc_results = disc_results
         return disc_results
-    
-    def solve(self, method='CN', tf=1.0, nt=100, tol=1e-6):
+
+    def solve(self, method='CN', tf=1.0, nt=100, tol=1e-6, **kwargs):
         dt = tf / nt
         if method == 'CN':
-            results = CN.cn(self.disc_results[0], self.disc_results[1], tf = tf, nt = nt, ic = self.ic, n_funcs = len(self.funcs))
+            results = cn(self.disc_results[0], self.disc_results[1],
+                         tf=tf, nt=nt, ic=self.ic,
+                         n_funcs=len(self.funcs), **kwargs)
             self.results = results
             return results
-        
+
         elif method == 'RKF':
-            results = SERKF45.SERKF45_cuda(self.disc_results[0], 
-                                           ivar = self.ivars, 
-                                           funcs = self.disc_results[1], 
-                                           yn = self.ic, 
-                                           sp_vars = self.sp_vars, 
-                                           n = 100,
-                                           n_funcs = len(self.funcs), 
-                                           dt_init = dt, 
-                                           tol = tol, 
-                                           x0=0, 
-                                           xn=nt*dt )
+            results = SERKF45.SERKF45_cuda(self.disc_results[0],
+                                           ivar=self.ivars,
+                                           funcs=self.disc_results[1],
+                                           yn=self.ic,
+                                           sp_vars=self.sp_vars,
+                                           n=100,
+                                           n_funcs=len(self.funcs),
+                                           dt_init=dt,
+                                           tol=tol,
+                                           x0=0,
+                                           xn=nt * dt)
             self.results = results
             return results
+
+        elif method == 'bdf2':
+            results = bdf2(self.disc_results[0], self.disc_results[1],
+                           tf=tf, nt=nt, ic=self.ic,
+                           n_funcs=len(self.funcs), **kwargs)
+            self.results = results
+            return results
+
         else:
             raise ValueError(f"Método de solução desconhecido: {method}")
-
 
     def visualize(self, mode='heatmap', func_idx=0, time_step=-1, **kwargs):
         if self.results is None:
@@ -127,7 +137,7 @@ class PDES:
 
         # Desempacota o resultado final e o histórico
         _, historico = self.results
-        
+
         # Prepara a malha (assumindo 2D)
         nx, ny = self.disc_n
         x = np.linspace(0, 1, nx)
@@ -137,8 +147,13 @@ class PDES:
         if mode == 'heatmap':
             self._plot_heatmap(historico, X, Y, func_idx, time_step)
         elif mode == 'animation':
-            self._animate(historico, X, Y, func_idx)
-        # Adicione outros modos conforme necessário...
+            self._animate(historico, X, Y, func_idx, **kwargs)
+        elif mode == 'plot3d':
+            self._plot3d(historico, X, Y, func_idx, time_step, **kwargs)
+        elif mode == 'animation3d':
+            self._animate3d(historico, X, Y, func_idx, **kwargs)
+        else:
+            print(f"Modo '{mode}' desconhecido. Use: 'heatmap', 'animation', 'plot3d' ou 'animation3d'.")
 
     def _plot_heatmap(self, historico, X, Y, func_idx, time_step):
         data = np.array(historico[func_idx][time_step]).reshape(self.disc_n)
@@ -147,39 +162,105 @@ class PDES:
         plt.title(f"Distribuição de {self.funcs[func_idx]} no passo {time_step}")
         plt.colorbar(contorno)
         plt.show()
-        
-    def _animate(self, historico, X, Y, func_idx, **kwargs):
 
-        # Extrai os parâmetros opcionais (ou usa o padrão)
+    def _animate(self, historico, X, Y, func_idx, **kwargs):
         frames_step = kwargs.get('frames_step', 1)
         interval = kwargs.get('interval', 50)
-        
+
         fig, ax = plt.subplots(figsize=(7, 6))
-        
-        # Pega a malha do tempo t=0
+
         Z_inicial = np.array(historico[func_idx][0]).reshape(self.disc_n)
-        
-        # Plota o frame inicial e fixa a barra de cores
         contorno = ax.contourf(X, Y, Z_inicial, levels=30, cmap='hot')
         fig.colorbar(contorno, ax=ax)
-        
+
         def update(frame):
-            ax.clear() # Limpa o frame anterior
-            
-            # Pega a malha do tempo atual
+            ax.clear()
             Z = np.array(historico[func_idx][frame]).reshape(self.disc_n)
-            
-            # Redesenha
             cont = ax.contourf(X, Y, Z, levels=30, cmap='hot')
             ax.set_title(f"Evolução de {self.funcs[func_idx]} - Passo {frame}")
             ax.set_xlabel('x')
             ax.set_ylabel('y')
             return cont,
 
-        # Cria a lista de frames pulando de acordo com frames_step
         total_frames = len(historico[func_idx])
         frames_list = range(0, total_frames, frames_step)
-        
-        # Roda a animação
         anim = FuncAnimation(fig, update, frames=frames_list, interval=interval, blit=False)
+        plt.show()
+
+    def _plot3d(self, historico, X, Y, func_idx, time_step, **kwargs):
+        """
+        Superfície 3D da solução em um instante de tempo.
+
+        Parâmetros kwargs opcionais
+        --------------------------
+        cmap      : str   — mapa de cores (padrão: 'hot')
+        alpha     : float — transparência da superfície (padrão: 1.0)
+        elev      : float — ângulo de elevação da câmera (padrão: 30)
+        azim      : float — ângulo azimutal da câmera   (padrão: -60)
+        """
+        cmap = kwargs.get('cmap', 'hot')
+        alpha = kwargs.get('alpha', 1.0)
+        elev = kwargs.get('elev', 30)
+        azim = kwargs.get('azim', -60)
+
+        data = np.array(historico[func_idx][time_step]).reshape(self.disc_n)
+
+        fig = plt.figure(figsize=(8, 6))
+        ax = fig.add_subplot(111, projection='3d')
+
+        ax.plot_surface(X, Y, data, cmap=cmap, alpha=alpha)
+
+        label = time_step if time_step >= 0 else len(historico[func_idx]) + time_step
+        ax.set_title(f"Superfície 3D de {self.funcs[func_idx]} - Passo {label}")
+        ax.set_xlabel('x')
+        ax.set_ylabel('y')
+        ax.set_zlabel(str(self.funcs[func_idx]))
+        ax.view_init(elev=elev, azim=azim)
+
+        plt.tight_layout()
+        plt.show()
+
+    def _animate3d(self, historico, X, Y, func_idx, **kwargs):
+        """
+        Animação 3D da evolução temporal da solução.
+
+        Parâmetros kwargs opcionais
+        --------------------------
+        frames_step : int   — intervalo entre frames (padrão: 1)
+        interval    : int   — milissegundos entre frames (padrão: 50)
+        cmap        : str   — mapa de cores (padrão: 'hot')
+        alpha       : float — transparência da superfície (padrão: 1.0)
+        elev        : float — ângulo de elevação da câmera (padrão: 30)
+        azim        : float — ângulo azimutal da câmera    (padrão: -60)
+        """
+        frames_step = kwargs.get('frames_step', 1)
+        interval = kwargs.get('interval', 50)
+        cmap = kwargs.get('cmap', 'hot')
+        alpha = kwargs.get('alpha', 1.0)
+        elev = kwargs.get('elev', 30)
+        azim = kwargs.get('azim', -60)
+
+        # Calcula limites globais de Z para manter a escala fixa durante a animação
+        todos_frames = [
+            np.array(historico[func_idx][f]).reshape(self.disc_n)
+            for f in range(0, len(historico[func_idx]), frames_step)
+        ]
+        z_min = min(Z.min() for Z in todos_frames)
+        z_max = max(Z.max() for Z in todos_frames)
+
+        fig = plt.figure(figsize=(8, 6))
+        ax = fig.add_subplot(111, projection='3d')
+
+        def update(frame):
+            ax.clear()
+            Z = todos_frames[frame]
+            ax.plot_surface(X, Y, Z, cmap=cmap, alpha=alpha)
+            ax.set_title(f"Evolução 3D de {self.funcs[func_idx]} - Passo {frame * frames_step}")
+            ax.set_xlabel('x')
+            ax.set_ylabel('y')
+            ax.set_zlabel(str(self.funcs[func_idx]))
+            ax.set_zlim(z_min, z_max)
+            ax.view_init(elev=elev, azim=azim)
+
+        anim = FuncAnimation(fig, update, frames=len(todos_frames), interval=interval, blit=False)
         plt.show()

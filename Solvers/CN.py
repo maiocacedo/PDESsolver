@@ -1,94 +1,126 @@
+"""
+CN.py
+-----
+Solver Crank-Nicolson com suporte a EDPs lineares e não-lineares.
+
+Para EDPs lineares: L é fixado uma vez (rápido).
+Para EDPs não-lineares: itera via Newton (padrão) ou Picard a cada passo.
+
+Fórmula CN:
+    (I - dt/2 * L) * u^{n+1} = (I + dt/2 * L) * u^n + dt/2 * (f^n + f^{n+1})
+"""
+
+import time
 import numpy as np
-import sympy as sp
-from sympy.parsing.sympy_parser import parse_expr
 import scipy.sparse as sp_sparse
 from scipy.sparse.linalg import spsolve
 
-def thomas_solver(a, b, c, d):
-    """Resolve o sistema tridiagonal Ax = d."""
-    n = len(d)
-    cp, dp, x = np.zeros(n-1), np.zeros(n), np.zeros(n)
-    
-    # Eliminação progressiva
-    cp[0] = c[0] / b[0]
-    dp[0] = d[0] / b[0]
-    for i in range(1, n):
-        denom = b[i] - a[i] * cp[i-1]
-        if i < n-1:
-            cp[i] = c[i] / denom
-        dp[i] = (d[i] - a[i] * dp[i-1]) / denom
-    
-    # Substituição regressiva
-    x[-1] = dp[-1]
-    for i in range(n-2, -1, -1):
-        x[i] = dp[i] - cp[i] * x[i+1]
-    return x
+from .solver_base import (
+    compile_equations, extract_linear_structure, detect_linearity,
+    eval_F, picard_step, newton_step,
+    make_history, save_to_history,
+)
 
-def cn(flat_list, d_vars, tf, nt, ic, n_funcs=None):
+
+def cn(flat_list, d_vars, tf, nt, ic, n_funcs=None,
+       nonlinear_method='newton', tol_nl=1e-8, max_iter_nl=20,
+       verbose_nl=False):
     """
-    Solver genérico Crank-Nicolson N-Dimensional com saída compatível com SERKF45.
+    Solver Crank-Nicolson.
+
+    Parâmetros
+    ----------
+    flat_list : list[str]
+        Equações discretizadas espacialmente.
+    d_vars : list[str]
+        Nomes das variáveis discretizadas.
+    tf : float
+        Tempo final.
+    nt : int
+        Número de passos de tempo.
+    ic : array-like
+        Condição inicial.
+    n_funcs : int, opcional
+        Número de funções dependentes.
+    nonlinear_method : str
+        Método para EDPs não-lineares: 'newton' (padrão) ou 'picard'.
+    tol_nl : float
+        Tolerância de convergência do método não-linear.
+    max_iter_nl : int
+        Máximo de iterações por passo.
+    verbose_nl : bool
+        Se True, imprime resíduo a cada iteração.
+
+    Retorna
+    -------
+    u : np.ndarray
+    final_list : list[list]
     """
     dt = tf / nt
-    n = len(d_vars)
-    u = np.array(ic, dtype=np.float64).flatten()
-    
-    t_sym = sp.Symbol('t')
-    sym_list = [sp.Symbol(v) for v in d_vars]
-    parsed_eqs = [parse_expr(eq_str) for eq_str in flat_list]
-    
-    # --- PREPARAÇÃO DO HISTÓRICO (Igual ao SERKF45) ---
-    final_list = [[] for _ in range(n_funcs)] if (n_funcs and (n % n_funcs == 0)) else []
-    n_elements = (n // n_funcs) if (n_funcs and (n % n_funcs == 0)) else n
+    n  = len(d_vars)
+    u  = np.array(ic, dtype=np.float64).flatten()
 
-    def save_to_history(current_u):
-        if n_funcs and (n % n_funcs == 0):
-            # Faz o reshape para separar os grupos e salva no histórico
-            u_reshaped = current_u.reshape((n_funcs, n_elements))
-            for jgrp in range(n_funcs):
-                final_list[jgrp].append(u_reshaped[jgrp].tolist())
+    final_list, use_groups, n_elements = make_history(n_funcs, n)
 
-    # Salva a condição inicial
-    save_to_history(u)
+    # --- Compilação ---
+    funcs = compile_equations(flat_list, d_vars)
 
-    # --- ETAPA DE COMPILAÇÃO ---
-    mapa_coeficientes = []
-    for expr in parsed_eqs:
-        linha = {'coeffs': [], 'fonte': None}
-        for j, sym in enumerate(sym_list):
-            coeff_sym = expr.coeff(sym)
-            if coeff_sym != 0:
-                func_coeff = sp.lambdify((t_sym, *sym_list), coeff_sym)
-                linha['coeffs'].append((j, func_coeff))
-        
-        fonte_sym = expr.as_coeff_Add()[0]
-        linha['fonte'] = sp.lambdify((t_sym, *sym_list), fonte_sym)
-        mapa_coeficientes.append(linha)
+    # --- Detecção de linearidade ---
+    is_linear, L = detect_linearity(funcs, n)
 
-    # --- LOOP DE TEMPO ---
+    I = sp_sparse.eye(n, format='csr')
+
+    if is_linear:
+        # Pré-computa matrizes fixas
+        _, fonte_func = extract_linear_structure(funcs, n, verbose=False)
+        A_impl = I - (dt / 2.0) * L
+        A_expl = I + (dt / 2.0) * L
+    else:
+        print(f"  [CN] EDP não-linear detectada — usando {nonlinear_method.upper()} "
+              f"(tol={tol_nl:.0e}, max_iter={max_iter_nl})")
+        _, fonte_func = extract_linear_structure(funcs, n, verbose=False)
+
+    save_to_history(u, final_list, use_groups, n_funcs, n_elements)
+
+    # --- Loop de tempo ---
+    t0 = time.time()
+    total_iters = 0
+
     for passo in range(nt):
-        tempo_atual = passo * dt
-        A_mat = sp_sparse.lil_matrix((n, n), dtype=np.float64)
-        rhs = np.zeros(n, dtype=np.float64)
-        u_args = tuple(u)
-        
-        for i in range(n):
-            A_mat[i, i] = 1.0
-            soma_implicita_un = 0.0
-            
-            for j, func_c in mapa_coeficientes[i]['coeffs']:
-                c_val = func_c(tempo_atual, *u_args) 
-                val_implicito = (dt / 2.0) * c_val
-                A_mat[i, j] -= val_implicito
-                soma_implicita_un += val_implicito * u[j]
-            
-            fonte_val = mapa_coeficientes[i]['fonte'](tempo_atual, *u_args)
-            rhs[i] = u[i] + soma_implicita_un + dt * fonte_val
-            
-        A_csr = A_mat.tocsr()
-        u = spsolve(A_csr, rhs)
-        
-        # Salva o estado atualizado no histórico
-        save_to_history(u)
-        
-    # Retorna (u_final, final_list) para manter a consistência
+        tempo_atual   = passo * dt
+        tempo_proximo = (passo + 1) * dt
+
+        if is_linear:
+            f_n  = fonte_func(tempo_atual)
+            f_n1 = fonte_func(tempo_proximo)
+            rhs  = A_expl.dot(u) + (dt / 2.0) * (f_n + f_n1)
+            u    = spsolve(A_impl, rhs)
+
+        else:
+            # rhs_hist = u^n + dt/2 * (L*u^n + f^n)  avaliado no estado atual
+            F_n      = eval_F(funcs, tempo_atual, u)
+            rhs_hist = u + (dt / 2.0) * F_n
+
+            if nonlinear_method == 'newton':
+                u, n_iter = newton_step(
+                    funcs, u, tempo_proximo, dt, n, rhs_hist,
+                    alpha=0.5, max_iter=max_iter_nl,
+                    tol_nl=tol_nl, verbose=verbose_nl
+                )
+            else:  # picard
+                u, n_iter = picard_step(
+                    funcs, u, tempo_proximo, dt, n, rhs_hist,
+                    alpha=0.5, max_iter=max_iter_nl,
+                    tol_nl=tol_nl, verbose=verbose_nl
+                )
+            total_iters += n_iter
+
+        save_to_history(u, final_list, use_groups, n_funcs, n_elements)
+
+    elapsed = time.time() - t0
+    print(f"  [CN] Loop de tempo: {elapsed:.3f}s", end="")
+    if not is_linear:
+        print(f" | Média iterações/passo: {total_iters/nt:.1f}", end="")
+    print()
+
     return u, final_list
