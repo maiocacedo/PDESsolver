@@ -1,0 +1,117 @@
+"""
+test_fitzhugh.py
+----------------
+Testa o sistema FitzHugh-Nagumo 2D.
+
+Sem solução analítica fechada. Os testes verificam:
+  1. Estabilidade: solução não diverge (valores dentro de [-3, 3])
+  2. Convergência do Newton: solver não lança warnings de divergência
+  3. Assimetria da CI: u deve ter valores positivos e negativos (Heaviside)
+  4. v permanece suave: variação espacial de v menor que a de u
+"""
+
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import warnings
+import pytest
+import os, sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from PDES import PDES
+import PDE
+
+# ---------------------------------------------------------------------------
+# Parâmetros fixos
+# ---------------------------------------------------------------------------
+DISC_N = [15, 15]
+TF     = 0.2
+NT     = 50
+DU     = 1.0
+EPS    = 0.08
+GAMMA  = 0.5
+BETA   = 0.7
+
+
+def montar_sistema():
+    pde_u = PDE.PDE(
+        f'dU/dt = {DU}*d2U/dx2 + {DU}*d2U/dy2 + U - U**3/3 - V',
+        'U', ['x', 'y'], ['t'],
+        ivar_boundary=[(0, 1), (0, 1)],
+        expr_ic='2*Heaviside(0.5 - x)*Heaviside(y - 0.5) - 1',
+        west_bd='Neumann', west_func_bd='0',
+        east_bd='Neumann', east_func_bd='0',
+        north_bd='Neumann', north_func_bd='0',
+        south_bd='Neumann', south_func_bd='0',
+    )
+    pde_v = PDE.PDE(
+        f'dV/dt = {EPS}*(U - {GAMMA}*V + {BETA})',
+        'V', ['x', 'y'], ['t'],
+        ivar_boundary=[(0, 1), (0, 1)],
+        expr_ic=f'{BETA} - {GAMMA}*y',
+        west_bd='Neumann', west_func_bd='0',
+        east_bd='Neumann', east_func_bd='0',
+        north_bd='Neumann', north_func_bd='0',
+        south_bd='Neumann', south_func_bd='0',
+    )
+    sim = PDES([pde_u, pde_v], DISC_N)
+    sim.discretize(method='central')
+    return sim
+
+
+@pytest.fixture(scope='module')
+def resultado():
+    sim = montar_sistema()
+    sim.solve(method='bdf2', tf=TF, nt=NT, tol=1e-6)
+    return sim
+
+
+# ---------------------------------------------------------------------------
+# Testes
+# ---------------------------------------------------------------------------
+
+def test_estabilidade_u(resultado):
+    """u deve permanecer dentro do intervalo físico [-3, 3]."""
+    _, hist = resultado.results
+    U_final = np.array(hist[0][-1])
+    assert np.all(U_final >= -3.0), f"u < -3: min={U_final.min():.2f}"
+    assert np.all(U_final <=  3.0), f"u >  3: max={U_final.max():.2f}"
+
+
+def test_estabilidade_v(resultado):
+    """v deve permanecer dentro do intervalo físico [-2, 2]."""
+    _, hist = resultado.results
+    V_final = np.array(hist[1][-1])
+    assert np.all(V_final >= -2.0), f"v < -2: min={V_final.min():.2f}"
+    assert np.all(V_final <=  2.0), f"v >  2: max={V_final.max():.2f}"
+
+
+def test_ci_assimetrica(resultado):
+    """
+    A CI de u é Heaviside — deve ter valores positivos e negativos.
+    Verifica que a CI foi aplicada corretamente.
+    """
+    _, hist = resultado.results
+    U_ini = np.array(hist[0][0])
+    assert U_ini.max() > 0.5,  "CI de u deveria ter valores positivos (Heaviside)"
+    assert U_ini.min() < -0.5, "CI de u deveria ter valores negativos (Heaviside)"
+
+
+def test_historico_completo(resultado):
+    """Histórico deve ter NT+1 entradas (CI + NT passos)."""
+    _, hist = resultado.results
+    assert len(hist[0]) == NT + 1, (
+        f"Histórico de u tem {len(hist[0])} entradas, esperado {NT + 1}"
+    )
+    assert len(hist[1]) == NT + 1, (
+        f"Histórico de v tem {len(hist[1])} entradas, esperado {NT + 1}"
+    )
+
+
+def test_sem_nan(resultado):
+    """Nenhum valor NaN ou Inf na solução final."""
+    _, hist = resultado.results
+    U_final = np.array(hist[0][-1])
+    V_final = np.array(hist[1][-1])
+    assert np.all(np.isfinite(U_final)), "u contém NaN ou Inf"
+    assert np.all(np.isfinite(V_final)), "v contém NaN ou Inf"

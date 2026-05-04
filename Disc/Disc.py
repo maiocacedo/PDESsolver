@@ -56,7 +56,6 @@ def _build_discretized_eqs(
         for v in xd_var:
             eqrs[j] = eqrs[j].replace(f"{v}{str_sp_vars}", f"{v}_ii_j")
 
-    # Substituir variáveis espaciais por múltiplos do passo
     for j in range(len(eqrs)):
         eqrs[j] = _repl_symbol(eqrs[j], str_sp_vars[0], f"ii * h{xd_var[0]}_")
         if len(str_sp_vars) == 2:
@@ -123,7 +122,6 @@ def _build_position_labels(n_part, str_sp_vars, n_funcs):
                     else:                        aux.append(f"Ce{func}_{i}_{j}")
             positions.append(aux)
     else:
-        # Labels 1D são preenchidos diretamente depois; aqui só reservamos espaço.
         positions = [[""] * n_part[0] for _ in range(n_funcs)]
 
     return positions
@@ -136,15 +134,15 @@ def _build_position_labels(n_part, str_sp_vars, n_funcs):
 def df(
     pdes,
     n_part: List[int],
-    west_bd:  str = "neumann",
+    west_bd=None,
     method:   str = "forward",
-    north_bd: str = "neumann",
-    south_bd: str = "neumann",
-    east_bd:  str = "neumann",
-    north_func_bd:  str = "0",
-    south_func_bd:  str = "0",
-    west_func_bd:   str = "0",
-    east_func_bd:   str = "0",
+    north_bd=None,
+    south_bd=None,
+    east_bd=None,
+    north_func_bd=None,
+    south_func_bd=None,
+    west_func_bd=None,
+    east_func_bd=None,
     north_alpha_bd: str = "0",
     south_alpha_bd: str = "0",
     east_alpha_bd:  str = "0",
@@ -158,10 +156,28 @@ def df(
     Retorna
     -------
     flat_list_positions : list[str]
-        Expressões discretizadas em cada ponto da malha (contorno + interior).
     d_vars : list[str]
-        Nomes das variáveis discretizadas (XX{func}_{i}_{j}).
+    dirichlet_constraints : dict[int, dict]
+        {idx: {'expr': str, 'x': float, 'y': float}}
+        Coordenadas x, y armazenadas para BCs dependentes de x, y e t.
     """
+    n_funcs_total = len(pdes.funcs)
+
+    def _as_list(val, default="neumann"):
+        if val is None:
+            return [default] * n_funcs_total
+        if isinstance(val, list):
+            return val
+        return [val] * n_funcs_total
+
+    west_bd       = _as_list(west_bd,  "neumann")
+    east_bd       = _as_list(east_bd,  "neumann")
+    north_bd      = _as_list(north_bd, "neumann")
+    south_bd      = _as_list(south_bd, "neumann")
+    west_func_bd  = _as_list(west_func_bd,  "0")
+    east_func_bd  = _as_list(east_func_bd,  "0")
+    north_func_bd = _as_list(north_func_bd, "0")
+    south_func_bd = _as_list(south_func_bd, "0")
 
     # -----------------------------------------------------------------------
     # 1. Prepara variáveis e equações
@@ -190,25 +206,25 @@ def df(
     n_funcs = len(pdes.funcs)
 
     if len(str_sp_vars) == 2:
-        list_south = get_boundary("south" if False else south_bd, south_func_bd,
-                                  south_alpha_bd, south_beta_bd).apply(
-                                      "south", list_eq, n_part, xd_var, str_sp_vars)
-        list_north = get_boundary(north_bd, north_func_bd,
-                                  north_alpha_bd, north_beta_bd).apply(
-                                      "north", list_eq, n_part, xd_var, str_sp_vars)
-        list_west  = get_boundary(west_bd,  west_func_bd).apply(
-                                      "west",  list_eq, n_part, xd_var, str_sp_vars) \
-                     if west_bd.lower() in ("dirichlet", "neumann", "robin") \
-                     else [[] for _ in range(n_funcs)]
+        list_south = [[] for _ in range(n_funcs)]
+        list_north = [[] for _ in range(n_funcs)]
+        list_west  = [[] for _ in range(n_funcs)]
+        list_east  = [[] for _ in range(n_funcs)]
 
-        list_east: List[List[str]] = [[] for _ in range(n_funcs)]
-        east_bc = get_boundary(east_bd, east_func_bd, east_alpha_bd, east_beta_bd)
         for func in range(n_funcs):
-            list_east[func].append(list_south[func][-1])
-            list_east[func].extend(
-                east_bc.apply("east", list_eq, n_part, xd_var, str_sp_vars)[func]
-            )
-            list_east[func].append(list_north[func][-1])
+            s_bc = get_boundary(south_bd[func], south_func_bd[func], south_alpha_bd, south_beta_bd)
+            list_south[func] = s_bc.apply("south", list_eq, n_part, xd_var, str_sp_vars)[func]
+
+            n_bc = get_boundary(north_bd[func], north_func_bd[func], north_alpha_bd, north_beta_bd)
+            list_north[func] = n_bc.apply("north", list_eq, n_part, xd_var, str_sp_vars)[func]
+
+            w_bc = get_boundary(west_bd[func], west_func_bd[func])
+            list_west[func] = w_bc.apply("west", list_eq, n_part, xd_var, str_sp_vars)[func] \
+                              if west_bd[func].lower() in ("dirichlet", "neumann", "robin") else []
+
+            e_bc = get_boundary(east_bd[func], east_func_bd[func], east_alpha_bd, east_beta_bd)
+            east_col = e_bc.apply("east", list_eq, n_part, xd_var, str_sp_vars)[func]
+            list_east[func] = [list_south[func][-1]] + east_col + [list_north[func][-1]]
 
     # -----------------------------------------------------------------------
     # 5. Monta a lista de posições com rótulos
@@ -216,17 +232,16 @@ def df(
     list_positions = _build_position_labels(n_part, str_sp_vars, n_funcs)
 
     if len(str_sp_vars) == 1:
-        # 1D: preenche diretamente usando get_boundary
         for func in range(n_funcs):
             C = 0
             for i in range(n_part[0]):
                 if i == 0:
-                    bc = get_boundary(west_bd, west_func_bd)
+                    bc = get_boundary(west_bd[func], west_func_bd[func])
                     list_positions[func][i] = bc.apply(
                         "west", list_eq, n_part, xd_var, str_sp_vars
                     )[func][0]
                 elif i == n_part[0] - 1:
-                    bc = get_boundary(east_bd, east_func_bd, east_alpha_bd, east_beta_bd)
+                    bc = get_boundary(east_bd[func], east_func_bd[func], east_alpha_bd, east_beta_bd)
                     list_positions[func][i] = bc.apply(
                         "east", list_eq, n_part, xd_var, str_sp_vars
                     )[func][0]
@@ -235,7 +250,6 @@ def df(
                     C += 1
 
     elif len(str_sp_vars) == 2:
-        # 2D: substitui rótulos pelos valores de contorno
         for func in range(n_funcs):
             C = 0
             for idx in range(len(list_positions[func])):
@@ -281,4 +295,60 @@ def df(
     for i in range(len(flat_list_positions)):
         flat_list_positions[i] = _h_pattern.sub(hx_val, flat_list_positions[i])
 
-    return flat_list_positions, d_vars
+    # -----------------------------------------------------------------------
+    # 7. Coleta constraints Dirichlet com coordenadas reais de cada nó.
+    #    Formato: {idx: {'expr': str, 'x': float, 'y': float}}
+    #    As coordenadas permitem avaliar BCs do tipo f(x, y, t).
+    # -----------------------------------------------------------------------
+    dirichlet_constraints: dict = {}
+    hx = 1.0 / (n_part[0] - 1)
+    hy = 1.0 / (n_part[1] - 1) if len(str_sp_vars) == 2 else 1.0
+
+    if len(str_sp_vars) == 2:
+        sides = {
+            'west':  west_bd,
+            'east':  east_bd,
+            'north': north_bd,
+            'south': south_bd,
+        }
+        func_exprs = {
+            'west':  west_func_bd,
+            'east':  east_func_bd,
+            'north': north_func_bd,
+            'south': south_func_bd,
+        }
+        Nx, Ny = n_part[0], n_part[1]
+        for func in range(n_funcs):
+            offset = func * Nx * Ny
+            for i in range(Nx):
+                for j in range(Ny):
+                    idx = offset + i * Ny + j
+                    side = None
+                    if   i == 0:      side = 'west'
+                    elif i == Nx - 1: side = 'east'
+                    elif j == 0:      side = 'south'
+                    elif j == Ny - 1: side = 'north'
+                    if side and sides[side][func].lower() == 'dirichlet':
+                        dirichlet_constraints[idx] = {
+                            'expr': func_exprs[side][func],
+                            'x': i * hx,
+                            'y': j * hy,
+                        }
+    else:
+        Nx = n_part[0]
+        for func in range(n_funcs):
+            offset = func * Nx
+            if west_bd[func].lower() == 'dirichlet':
+                dirichlet_constraints[offset] = {
+                    'expr': west_func_bd[func],
+                    'x': 0.0,
+                    'y': 0.0,
+                }
+            if east_bd[func].lower() == 'dirichlet':
+                dirichlet_constraints[offset + Nx - 1] = {
+                    'expr': east_func_bd[func],
+                    'x': (Nx - 1) * hx,
+                    'y': 0.0,
+                }
+
+    return flat_list_positions, d_vars, dirichlet_constraints

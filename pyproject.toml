@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "pdesolver"
+version = "0.1.0"
+description = "Framework Python para discretização e solução numérica de sistemas de EDPs em domínios 1D e 2D"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+
+authors = [
+    { name = "Seu Nome", email = "seu@email.com" }
+]
+
+keywords = [
+    "pde", "partial differential equations", "finite differences",
+    "numerical methods", "bdf2", "crank-nicolson", "scientific computing"
+]
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Education",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Topic :: Scientific/Engineering :: Physics",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+
+# Dependências obrigatórias
+dependencies = [
+    "numpy>=1.22",
+    "scipy>=1.9",
+    "sympy>=1.11",
+    "matplotlib>=3.5",
+]
+
+[project.optional-dependencies]
+# GPU (RKF solver) — opcional pois requer CUDA
+gpu = [
+    "cupy-cuda12x>=12.0",   # ajuste para cupy-cuda11x se usar CUDA 11
+]
+# Desenvolvimento e testes
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "black",
+    "isort",
+    "ruff",
+]
+
+[project.urls]
+Homepage = "https://github.com/seuusuario/pdesolver"
+Documentation = "https://github.com/seuusuario/pdesolver#readme"
+Issues = "https://github.com/seuusuario/pdesolver/issues"
+
+[tool.setuptools.packages.find]
+# Descobre automaticamente PDESsolver, Auxs, Disc, Solvers
+where = ["."]
+include = ["PDESsolver*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.md", "*.txt"]

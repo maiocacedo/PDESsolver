@@ -38,8 +38,8 @@ import PDE
 # ---------------------------------------------------------------------------
 disc_n = [11, 11]
 nu     = 0.1
-tf     = 0.5
-nt     = 200
+tf     = 1.0
+nt     = 500
 
 x_lin = np.linspace(0, 1, disc_n[0])
 y_lin = np.linspace(0, 1, disc_n[1])
@@ -68,17 +68,18 @@ PDE_burgers = PDE.PDE(
     f'dU/dt + U*dU/dx + U*dU/dy = {nu}*d2U/dx2 + {nu}*d2U/dy2',
     'U', ['x', 'y'], ['t'],
     ivar_boundary=[(0, 1), (0, 1)],
-    expr_ic=ic_expr
+    expr_ic=ic_expr,
+    west_bd="Dirichlet",  west_func_bd=bc_expr,
+    east_bd="Dirichlet",  east_func_bd=bc_expr,
+    north_bd="Dirichlet", north_func_bd=bc_expr,
+    south_bd="Dirichlet", south_func_bd=bc_expr,
 )
 
 PDES1 = PDES([PDE_burgers], disc_n)
 
 PDES1.discretize(
-    method="central",
-    west_bd="Dirichlet",  west_func_bd=bc_expr,
-    east_bd="Dirichlet",  east_func_bd=bc_expr,
-    north_bd="Dirichlet", north_func_bd=bc_expr,
-    south_bd="Dirichlet", south_func_bd=bc_expr,
+    method="backward",
+
 )
 
 # ---------------------------------------------------------------------------

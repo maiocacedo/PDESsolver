@@ -32,25 +32,27 @@ def analitica(X, Y, t):
 # ---------------------------------------------------------------------------
 # EDP com termo fonte embutido
 # ---------------------------------------------------------------------------
+bc_expr = "exp(-2*0.1*pi**2*t) * sin(pi*x) * sin(pi*y)"
+
 PDE_adv = PDE.PDE(
     f'dU/dt = -{cx}*dU/dx + -{cy}*dU/dy'
     f' + {nu}*d2U/dx2 + {nu}*d2U/dy2'
     f' + {cx}*pi*exp(-2*{nu}*pi**2*t)*(cos(pi*x)*sin(pi*y) + sin(pi*x)*cos(pi*y))',
     'U', ['x', 'y'], ['t'],
     ivar_boundary=[(0, 1), (0, 1)],
-    expr_ic='sin(pi * x) * sin(pi * y)'
+    expr_ic='sin(pi * x) * sin(pi * y)',
+    west_bd="Dirichlet",  west_func_bd=bc_expr,
+    east_bd="Dirichlet",  east_func_bd=bc_expr,
+    north_bd="Dirichlet", north_func_bd=bc_expr,
+    south_bd="Dirichlet", south_func_bd=bc_expr,
 )
 
 PDES1 = PDES([PDE_adv], disc_n)
 
 # BCs Dirichlet dependentes do tempo — o solver atualiza via d_dt() a cada passo
-bc_expr = "exp(-2*0.1*pi**2*t) * sin(pi*x) * sin(pi*y)"
 PDES1.discretize(
     method="central",
-    west_bd="Dirichlet",  west_func_bd=bc_expr, 
-    east_bd="Dirichlet",  east_func_bd=bc_expr,
-    north_bd="Dirichlet", north_func_bd=bc_expr,
-    south_bd="Dirichlet", south_func_bd=bc_expr,
+
 )
 
 resultado_analitico = analitica(X, Y, tf).flatten().tolist()

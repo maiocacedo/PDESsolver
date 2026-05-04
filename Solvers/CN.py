@@ -24,54 +24,68 @@ from .solver_base import (
 
 def cn(flat_list, d_vars, tf, nt, ic, n_funcs=None,
        nonlinear_method='newton', tol_nl=1e-8, max_iter_nl=20,
-       verbose_nl=False):
+       verbose_nl=False, dirichlet_constraints=None):
     """
     Solver Crank-Nicolson.
 
     Parâmetros
     ----------
     flat_list : list[str]
-        Equações discretizadas espacialmente.
     d_vars : list[str]
-        Nomes das variáveis discretizadas.
     tf : float
-        Tempo final.
     nt : int
-        Número de passos de tempo.
     ic : array-like
-        Condição inicial.
     n_funcs : int, opcional
-        Número de funções dependentes.
-    nonlinear_method : str
-        Método para EDPs não-lineares: 'newton' (padrão) ou 'picard'.
+    nonlinear_method : str  ('newton' ou 'picard')
     tol_nl : float
-        Tolerância de convergência do método não-linear.
     max_iter_nl : int
-        Máximo de iterações por passo.
     verbose_nl : bool
-        Se True, imprime resíduo a cada iteração.
+    dirichlet_constraints : dict[int, dict] | None
+        {idx: {'expr': str, 'x': float, 'y': float}}
 
     Retorna
     -------
     u : np.ndarray
     final_list : list[list]
     """
+    import math
+
     dt = tf / nt
     n  = len(d_vars)
     u  = np.array(ic, dtype=np.float64).flatten()
+
+    dirichlet_constraints = dirichlet_constraints or {}
+
+    def _apply_dirichlet(u, t_val):
+        for idx, info in dirichlet_constraints.items():
+            try:
+                u[idx] = float(eval(
+                    info['expr'],
+                    {'t': t_val, 'x': info['x'], 'y': info['y'],
+                     'exp': math.exp, 'sin': math.sin, 'cos': math.cos,
+                     'pi': math.pi, '__builtins__': {}}
+                ))
+            except Exception:
+                try:
+                    u[idx] = float(info['expr'])
+                except Exception:
+                    pass
+        return u
+
+    u = _apply_dirichlet(u, 0.0)
 
     final_list, use_groups, n_elements = make_history(n_funcs, n)
 
     # --- Compilação ---
     funcs = compile_equations(flat_list, d_vars)
 
-    # --- Detecção de linearidade ---
-    is_linear, L = detect_linearity(funcs, n)
+    # --- Detecção de linearidade (excluindo nós Dirichlet) ---
+    is_linear, L = detect_linearity(funcs, n,
+                                    dirichlet_indices=list(dirichlet_constraints.keys()))
 
     I = sp_sparse.eye(n, format='csr')
 
     if is_linear:
-        # Pré-computa matrizes fixas
         _, fonte_func = extract_linear_structure(funcs, n, verbose=False)
         A_impl = I - (dt / 2.0) * L
         A_expl = I + (dt / 2.0) * L
@@ -95,9 +109,9 @@ def cn(flat_list, d_vars, tf, nt, ic, n_funcs=None,
             f_n1 = fonte_func(tempo_proximo)
             rhs  = A_expl.dot(u) + (dt / 2.0) * (f_n + f_n1)
             u    = spsolve(A_impl, rhs)
+            u    = _apply_dirichlet(u, tempo_proximo)
 
         else:
-            # rhs_hist = u^n + dt/2 * (L*u^n + f^n)  avaliado no estado atual
             F_n      = eval_F(funcs, tempo_atual, u)
             rhs_hist = u + (dt / 2.0) * F_n
 
@@ -107,12 +121,13 @@ def cn(flat_list, d_vars, tf, nt, ic, n_funcs=None,
                     alpha=0.5, max_iter=max_iter_nl,
                     tol_nl=tol_nl, verbose=verbose_nl
                 )
-            else:  # picard
+            else:
                 u, n_iter = picard_step(
                     funcs, u, tempo_proximo, dt, n, rhs_hist,
                     alpha=0.5, max_iter=max_iter_nl,
                     tol_nl=tol_nl, verbose=verbose_nl
                 )
+            u = _apply_dirichlet(u, tempo_proximo)
             total_iters += n_iter
 
         save_to_history(u, final_list, use_groups, n_funcs, n_elements)

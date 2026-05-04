@@ -5,14 +5,16 @@ Solver RKF45 (Dormand-Prince) otimizado para GPU via CuPy.
 
 Melhorias em relação à versão anterior:
 - Buffer pré-alocado para saída de F_all (sem cp.stack a cada avaliação)
-- Sincronização CPU↔GPU reduzida: apenas uma .get() por passo aceito
+- Sincronização CPU<->GPU reduzida: apenas uma .get() por passo aceito
 - Norma de erro mista (L2 relativa + absoluta) mais robusta para sistemas grandes
 - Limite de iterações com aviso para evitar loop infinito
 - Correção: acos mapeado para cp.arccos (era cp.arctan por engano)
 - Fator de segurança adaptativo com memória do passo anterior (PI controller)
+- Reaplicação de BCs Dirichlet após cada passo aceito (suporte a f(x,y,t))
 """
 
 import ctypes
+import math as _math
 import os
 import re
 import sys
@@ -87,7 +89,7 @@ def get_short_path(path):
 
 
 # ---------------------------------------------------------------------------
-# Mapa CuPy (corrigido: acos → cp.arccos)
+# Mapa CuPy
 # ---------------------------------------------------------------------------
 
 CUPY_MAP = {
@@ -111,21 +113,43 @@ def SERKF45_cuda(
     dt_max=None, tol=1e-5, dt_init=None,
     atol=1e-6, rtol=None,
     max_steps=10_000_000,
+    dirichlet_constraints=None,
 ):
     """
     Solver RKF45 (Dormand-Prince) com controle adaptativo de passo.
 
-    Parâmetros adicionais em relação à versão anterior
-    ---------------------------------------------------
+    Parâmetros
+    ----------
     atol : float
         Tolerância absoluta para o erro misto (padrão: 1e-6).
     rtol : float | None
         Tolerância relativa. Se None, usa o valor de `tol`.
     max_steps : int
         Limite de passos para evitar loop infinito (padrão: 10_000_000).
+    dirichlet_constraints : dict[int, dict] | None
+        {idx: {'expr': str, 'x': float, 'y': float}}
+        Reaplicado após cada passo aceito.
     """
     if rtol is None:
         rtol = tol
+
+    dirichlet_constraints = dirichlet_constraints or {}
+
+    def _apply_dirichlet_gpu(y_gpu, t_val):
+        for idx, info in dirichlet_constraints.items():
+            try:
+                val = float(eval(
+                    info['expr'],
+                    {'t': t_val, 'x': info['x'], 'y': info['y'],
+                     'exp': _math.exp, 'sin': _math.sin, 'cos': _math.cos,
+                     'pi': _math.pi, '__builtins__': {}}
+                ))
+            except Exception:
+                try:
+                    val = float(info['expr'])
+                except Exception:
+                    continue
+            y_gpu[idx] = val
 
     # -----------------------------------------------------------------------
     # 1. Símbolos e compilação
@@ -143,11 +167,9 @@ def SERKF45_cuda(
 
     F_tuple = sp.lambdify((t_sym, *y_syms), tuple(exprs), modules=[CUPY_MAP, cp])
 
-    # Buffer pré-alocado para saída de F — evita alocação a cada avaliação
     _out_buf = cp.empty(m, dtype=cp.float64)
 
     def F_all(t_scalar, y_vec):
-        """Avalia todas as EDOs e escreve no buffer pré-alocado."""
         out = F_tuple(t_scalar, *[y_vec[k] for k in range(m)])
         for k in range(m):
             _out_buf[k] = out[k]
@@ -162,6 +184,8 @@ def SERKF45_cuda(
     y = cp.asarray(yn, dtype=dtype).reshape(m,)
     if y.size != m:
         raise ValueError(f"len(yn) ({y.size}) != número de EDOs ({m}).")
+
+    _apply_dirichlet_gpu(y, float(x0))
 
     use_history = n_funcs and (m % n_funcs == 0)
     n_elements  = (m // n_funcs) if use_history else m
@@ -204,15 +228,15 @@ def SERKF45_cuda(
     b1s, b3s, b4s, b5s         = 25/216, 1408/2565, 2197/4104, -1/5
 
     # -----------------------------------------------------------------------
-    # 5. Buffers pré-alocados (sem alocação dentro do loop)
+    # 5. Buffers pré-alocados
     # -----------------------------------------------------------------------
     k1 = cp.empty(m, dtype=dtype); k2 = cp.empty(m, dtype=dtype)
     k3 = cp.empty(m, dtype=dtype); k4 = cp.empty(m, dtype=dtype)
     k5 = cp.empty(m, dtype=dtype); k6 = cp.empty(m, dtype=dtype)
     y4 = cp.empty(m, dtype=dtype); y5 = cp.empty(m, dtype=dtype)
-    sc = cp.empty(m, dtype=dtype)  # vetor de escala para norma mista
+    sc = cp.empty(m, dtype=dtype)
 
-    err_prev  = 1.0   # para o controlador PI
+    err_prev  = 1.0
     n_steps   = 0
     n_reject  = 0
 
@@ -228,7 +252,6 @@ def SERKF45_cuda(
             )
             break
 
-        # Estágios
         cp.copyto(k1, F_all(t,           y))
         cp.copyto(k2, F_all(t + c2*h,    y + h*(a21*k1)))
         cp.copyto(k3, F_all(t + c3*h,    y + h*(a31*k1 + a32*k2)))
@@ -239,32 +262,28 @@ def SERKF45_cuda(
         cp.copyto(y4, y + h*(b1s*k1 + b3s*k3 + b4s*k4 + b5s*k5))
         cp.copyto(y5, y + h*(b1 *k1 + b3 *k3 + b4 *k4 + b5 *k5 + b6 *k6))
 
-        # Norma de erro mista (L2 normalizada) — mais robusta que norma infinito
-        # sc[i] = atol + rtol * max(|y[i]|, |y5[i]|)
         cp.maximum(cp.abs(y), cp.abs(y5), out=sc)
         sc *= rtol
         sc += atol
         diff = (y5 - y4) / sc
-        err  = float(cp.sqrt(cp.mean(diff * diff)).get())   # uma única sincronização
+        err  = float(cp.sqrt(cp.mean(diff * diff)).get())
 
         if err <= 1.0:
-            # --- Aceita o passo ---
             cp.copyto(y, y5)
             t = t + h
+            _apply_dirichlet_gpu(y, float(t))
             n_steps += 1
             save_history(y)
 
-            # Controlador PI para o próximo h (mais suave que fator puro)
             if err > 1e-10:
                 factor = 0.9 * (1.0 / err)**0.4 * (err_prev)**0.1
             else:
-                factor = 5.0   # erro quase zero → cresce agressivamente
+                factor = 5.0
             factor   = min(5.0, max(0.2, factor))
             err_prev = err
             h = clamp_h(dtype(factor) * h, t, t1, dt_max)
 
         else:
-            # --- Rejeita o passo ---
             n_reject += 1
             factor = max(0.1, 0.9 * (1.0 / err)**0.25)
             h = clamp_h(dtype(factor) * h, t, t1, dt_max)

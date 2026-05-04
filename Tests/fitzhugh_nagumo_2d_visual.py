@@ -35,11 +35,11 @@ import PDE
 # ---------------------------------------------------------------------------
 disc_n = [11, 11]
 Du     = 1.0
-Dv     = 0.0
+Dv     = 0.1
 eps    = 0.08
 gamma  = 0.5
 beta   = 0.7
-tf     = 20.0
+tf     = 1.0
 nt     = 500
 
 # ---------------------------------------------------------------------------
@@ -49,24 +49,29 @@ PDE_u = PDE.PDE(
     f'dU/dt = {Du}*d2U/dx2 + {Du}*d2U/dy2 + U - U**3/3 - V',
     'U', ['x', 'y'], ['t'],
     ivar_boundary=[(0, 1), (0, 1)],
-    expr_ic='2*Heaviside(0.5 - x)*Heaviside(y - 0.5) - 1'
+    expr_ic='2*Heaviside(0.5 - x)*Heaviside(y - 0.5) - 1',
+    west_bd="Neumann",  west_func_bd="0",
+    east_bd="Neumann",  east_func_bd="0",
+    north_bd="Neumann", north_func_bd="0",
+    south_bd="Neumann", south_func_bd="0",
 )
 
 PDE_v = PDE.PDE(
     f'dV/dt = {eps}*(U - {gamma}*V + {beta})',
     'V', ['x', 'y'], ['t'],
     ivar_boundary=[(0, 1), (0, 1)],
-    expr_ic=f'{beta} - {gamma}*y'
+    expr_ic=f'{beta} - {gamma}*y',
+    west_bd="Neumann",  west_func_bd="0",
+    east_bd="Neumann",  east_func_bd="0",
+    north_bd="Neumann", north_func_bd="0",
+    south_bd="Neumann", south_func_bd="0",
 )
 
 PDES1 = PDES([PDE_u, PDE_v], disc_n)
 
 PDES1.discretize(
     method="central",
-    west_bd="Neumann",  west_func_bd="0",
-    east_bd="Neumann",  east_func_bd="0",
-    north_bd="Neumann", north_func_bd="0",
-    south_bd="Neumann", south_func_bd="0",
+
 )
 
 # ---------------------------------------------------------------------------
@@ -81,13 +86,3 @@ resultado_final_bdf2 = PDES1.results
 # ---------------------------------------------------------------------------
 PDES1.visualize(mode='plot3d', func_idx=0, cmap="RdYlBu_r")
 PDES1.visualize(mode='plot3d', func_idx=1, cmap="PRGn") 
-# ---------------------------------------------------------------------------
-# Resolve com RKF
-# ---------------------------------------------------------------------------
-PDES1.solve(method='RKF', tf=tf, nt=nt, tol=1e-5)
-
-# ---------------------------------------------------------------------------
-# Visualização
-# ---------------------------------------------------------------------------
-PDES1.visualize(mode='plot3d', func_idx=0, cmap="RdBu_r")   # u — potencial
-PDES1.visualize(mode='plot3d', func_idx=1, cmap="PRGn")     # v — recuperação

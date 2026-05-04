@@ -3,9 +3,6 @@ bdf2.py
 -------
 Solver BDF2 com suporte a EDPs lineares e não-lineares.
 
-Para EDPs lineares: L é fixado uma vez (rápido).
-Para EDPs não-lineares: itera via Newton (padrão) ou Picard a cada passo.
-
 Fórmula BDF2:
     (I - 2dt/3 * L) * u^{n+1} = (4u^n - u^{n-1})/3 + (2dt/3)*f^{n+1}
 
@@ -27,49 +24,64 @@ from .solver_base import (
 
 def bdf2(flat_list, d_vars, tf, nt, ic, n_funcs=None,
          nonlinear_method='newton', tol_nl=1e-8, max_iter_nl=20,
-         verbose_nl=False):
+         verbose_nl=False, dirichlet_constraints=None):
     """
     Solver BDF2.
 
     Parâmetros
     ----------
     flat_list : list[str]
-        Equações discretizadas espacialmente.
     d_vars : list[str]
-        Nomes das variáveis discretizadas.
     tf : float
-        Tempo final.
     nt : int
-        Número de passos de tempo.
     ic : array-like
-        Condição inicial.
     n_funcs : int, opcional
-        Número de funções dependentes.
-    nonlinear_method : str
-        Método para EDPs não-lineares: 'newton' (padrão) ou 'picard'.
+    nonlinear_method : str  ('newton' ou 'picard')
     tol_nl : float
-        Tolerância de convergência do método não-linear.
     max_iter_nl : int
-        Máximo de iterações por passo.
     verbose_nl : bool
-        Se True, imprime resíduo a cada iteração.
+    dirichlet_constraints : dict[int, dict] | None
+        {idx: {'expr': str, 'x': float, 'y': float}}
 
     Retorna
     -------
     u : np.ndarray
     final_list : list[list]
     """
+    import math
+
     dt = tf / nt
     n  = len(d_vars)
     u  = np.array(ic, dtype=np.float64).flatten()
+
+    dirichlet_constraints = dirichlet_constraints or {}
+
+    def _apply_dirichlet(u, t_val):
+        for idx, info in dirichlet_constraints.items():
+            try:
+                u[idx] = float(eval(
+                    info['expr'],
+                    {'t': t_val, 'x': info['x'], 'y': info['y'],
+                     'exp': math.exp, 'sin': math.sin, 'cos': math.cos,
+                     'pi': math.pi, '__builtins__': {}}
+                ))
+            except Exception:
+                try:
+                    u[idx] = float(info['expr'])
+                except Exception:
+                    pass
+        return u
+
+    u = _apply_dirichlet(u, 0.0)
 
     final_list, use_groups, n_elements = make_history(n_funcs, n)
 
     # --- Compilação ---
     funcs = compile_equations(flat_list, d_vars)
 
-    # --- Detecção de linearidade ---
-    is_linear, L = detect_linearity(funcs, n)
+    # --- Detecção de linearidade (excluindo nós Dirichlet) ---
+    is_linear, L = detect_linearity(funcs, n,
+                                    dirichlet_indices=list(dirichlet_constraints.keys()))
 
     I = sp_sparse.eye(n, format='csr')
 
@@ -95,10 +107,8 @@ def bdf2(flat_list, d_vars, tf, nt, ic, n_funcs=None,
         rhs_1  = u + dt * fonte_func(tempo_1)
         u_prev = u.copy()
         u      = spsolve(A_bdf1, rhs_1)
+        u      = _apply_dirichlet(u, tempo_1)
     else:
-        F_0      = eval_F(funcs, 0.0, u)
-        rhs_hist = u + dt * eval_F(funcs, 0.0, np.zeros(n))  # fonte em u=0
-
         if nonlinear_method == 'newton':
             u_new, n_iter = newton_step(
                 funcs, u, tempo_1, dt, n, u,
@@ -113,7 +123,7 @@ def bdf2(flat_list, d_vars, tf, nt, ic, n_funcs=None,
             )
         total_iters += n_iter
         u_prev = u.copy()
-        u      = u_new
+        u      = _apply_dirichlet(u_new, tempo_1)
 
     save_to_history(u, final_list, use_groups, n_funcs, n_elements)
 
@@ -128,6 +138,7 @@ def bdf2(flat_list, d_vars, tf, nt, ic, n_funcs=None,
             rhs_vec = rhs_hist + (2.0 * dt / 3.0) * fonte_func(tempo_n1)
             u_prev  = u.copy()
             u       = spsolve(A_bdf2, rhs_vec)
+            u       = _apply_dirichlet(u, tempo_n1)
 
         else:
             if nonlinear_method == 'newton':
@@ -144,7 +155,7 @@ def bdf2(flat_list, d_vars, tf, nt, ic, n_funcs=None,
                 )
             total_iters += n_iter
             u_prev = u.copy()
-            u      = u_new
+            u      = _apply_dirichlet(u_new, tempo_n1)
 
         save_to_history(u, final_list, use_groups, n_funcs, n_elements)
 
