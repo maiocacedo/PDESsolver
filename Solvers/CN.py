@@ -1,3 +1,4 @@
+from tabnanny import verbose
 import time
 import numpy as np
 import sympy as sp
@@ -20,9 +21,9 @@ def _make_bc_lambda(expr_str: str):
 
 def cn(flat_list, d_vars, tf, nt, ic, n_funcs=None,
        nonlinear_method='newton', tol_nl=1e-8, max_iter_nl=20,
-       verbose_nl=False,
        dirichlet_constraints=None,
-       neumann_constraints=None):
+       neumann_constraints=None,
+       verbose=False):
     dt = tf / nt
     n  = len(d_vars)
     u  = np.array(ic, dtype=np.float64).flatten()
@@ -98,8 +99,9 @@ def cn(flat_list, d_vars, tf, nt, ic, n_funcs=None,
         A_impl = I - (dt / 2.0) * L
         A_expl = I + (dt / 2.0) * L
     else:
-        print(f"  [CN] EDP nao-linear detectada - usando {nonlinear_method.upper()} "
-              f"(tol={tol_nl:.0e}, max_iter={max_iter_nl})")
+        if verbose:
+            print(f"  [CN] EDP nao-linear detectada - usando {nonlinear_method.upper()} "
+                  f"(tol={tol_nl:.0e}, max_iter={max_iter_nl})")
         _, fonte_func = extract_linear_structure(funcs, n, verbose=False)
 
     save_to_history(u, final_list, use_groups, n_funcs, n_elements)
@@ -126,13 +128,13 @@ def cn(flat_list, d_vars, tf, nt, ic, n_funcs=None,
                 u, n_iter = newton_step(
                     funcs, u, tempo_proximo, dt, n, rhs_hist,
                     alpha=0.5, max_iter=max_iter_nl,
-                    tol_nl=tol_nl, verbose=verbose_nl
+                    tol_nl=tol_nl, verbose=verbose
                 )
             else:
                 u, n_iter = picard_step(
                     funcs, u, tempo_proximo, dt, n, rhs_hist,
                     alpha=0.5, max_iter=max_iter_nl,
-                    tol_nl=tol_nl, verbose=verbose_nl
+                    tol_nl=tol_nl, verbose=verbose
                 )
             u = _apply_bcs(u, tempo_proximo)
             total_iters += n_iter
@@ -140,9 +142,10 @@ def cn(flat_list, d_vars, tf, nt, ic, n_funcs=None,
         save_to_history(u, final_list, use_groups, n_funcs, n_elements)
 
     elapsed = time.time() - t0
-    print(f"  [CN] Loop de tempo: {elapsed:.3f}s", end="")
-    if not is_linear:
-        print(f" | Media iteracoes/passo: {total_iters/nt:.1f}", end="")
-    print()
+    if verbose:
+        print(f"  [CN] Loop de tempo: {elapsed:.3f}s", end="")
+        if not is_linear:
+            print(f" | Media iteracoes/passo: {total_iters/nt:.1f}", end="")
+        print()
 
     return u, final_list

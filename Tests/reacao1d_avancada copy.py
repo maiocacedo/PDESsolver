@@ -77,7 +77,7 @@ PDES1 = PDES([PDE_A, PDE_B, PDE_C, PDE_D], disc_n)
 
 PDES1.discretize(method="backward")
 
-PDES1.solve(method='bdf2', tf=tf, nt=nt, tol=1e-6)
+PDES1.solve(method='bdf2', tf=tf, nt=nt, tol=1e-6, verbose=False)
 resultado_final_cn = PDES1.results
 # Perfil no instante final (ou qualquer time_step)
 PDES1.visualize(mode='plot3d', func_idx=0)

@@ -6,7 +6,7 @@ from sympy.parsing.sympy_parser import parse_expr
 import scipy.sparse as sp_sparse
 from scipy.sparse.linalg import spsolve
 
-def compile_equations(flat_list, d_vars, verbose=True):
+def compile_equations(flat_list, d_vars, verbose=False):
     t0 = time.time()
     t_sym    = sp.Symbol('t')
     sym_list = [sp.Symbol(v) for v in d_vars]
@@ -21,7 +21,7 @@ def compile_equations(flat_list, d_vars, verbose=True):
         print(f"  Compilação lambdify: {time.time()-t0:.3f}s")
     return funcs
 
-def detect_linearity(funcs, n, t0_val=0.0, verbose=True):
+def detect_linearity(funcs, n, t0_val=0.0, verbose=False):
     t0 = time.time()
     zeros = np.zeros(n)
     ones  = np.ones(n)
@@ -66,7 +66,7 @@ def _extract_L(funcs, n, u_ref, t_val):
     L = sp_sparse.csr_matrix((vals, (rows, cols)), shape=(n, n))
     return L, fonte
 
-def extract_linear_structure(funcs, n, t0_val=0.0, verbose=True):
+def extract_linear_structure(funcs, n, t0_val=0.0, verbose=False):
     t0 = time.time()
     L, _ = _extract_L(funcs, n, np.zeros(n), t0_val)
 

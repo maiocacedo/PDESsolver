@@ -85,6 +85,7 @@ def SERKF45_cuda(
     max_steps=10_000_000,
     dirichlet_constraints=None,
     neumann_constraints=None,
+    verbose=False
 ):
     if rtol is None:
         rtol = tol
@@ -263,6 +264,7 @@ def SERKF45_cuda(
             h = clamp_h(dtype(factor) * h, t, t1, dt_max)
 
     if n_reject > 0:
-        print(f"  [RKF] Passos aceitos: {n_steps} | Rejeitados: {n_reject}")
+        if verbose:
+            print(f"  [RKF] Passos aceitos: {n_steps} | Rejeitados: {n_reject}")
 
     return y.get(), final_list

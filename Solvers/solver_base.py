@@ -6,7 +6,7 @@ from sympy.parsing.sympy_parser import parse_expr
 import scipy.sparse as sp_sparse
 from scipy.sparse.linalg import spsolve
 
-def compile_equations(flat_list, d_vars, verbose=True):
+def compile_equations(flat_list, d_vars, verbose=False):
     t0 = time.time()
     t_sym    = sp.Symbol('t')
     sym_list = [sp.Symbol(v) for v in d_vars]
@@ -21,7 +21,7 @@ def compile_equations(flat_list, d_vars, verbose=True):
         print(f"  Compilação lambdify: {time.time()-t0:.3f}s")
     return funcs
 
-def detect_linearity(funcs, n, t0_val=0.0, verbose=True,
+def detect_linearity(funcs, n, t0_val=0.0, verbose=False,
                      dirichlet_indices=None):
     t0 = time.time()
     zeros = np.zeros(n)
@@ -73,7 +73,7 @@ def _extract_L(funcs, n, u_ref, t_val, eps=1e-6):
     return L, fonte
 
 
-def extract_linear_structure(funcs, n, t0_val=0.0, verbose=True):
+def extract_linear_structure(funcs, n, t0_val=0.0, verbose=False):
     t0 = time.time()
     L, _ = _extract_L(funcs, n, np.zeros(n), t0_val)
 
@@ -215,8 +215,9 @@ def newton_step(funcs, u, t_new, dt, n, rhs_hist,
         t_cache = time.time()
         sparsity, colors, n_colors = _detect_sparsity_pattern(funcs, n, eps=eps)
         _cache[n] = (sparsity, colors, n_colors)
-        print(f"  [Newton] Esparsidade detectada: {sparsity.nnz} entradas não-nulas, "
-              f"{n_colors} cores (vs {n} colunas) — {time.time()-t_cache:.3f}s")
+        if verbose:
+            print(f"  [Newton] Esparsidade detectada: {sparsity.nnz} entradas não-nulas, "
+                  f"{n_colors} cores (vs {n} colunas) — {time.time()-t_cache:.3f}s")
     else:
         sparsity, colors, n_colors = _cache[n]
 

@@ -20,9 +20,9 @@ def _make_bc_lambda(expr_str: str):
 
 def bdf2(flat_list, d_vars, tf, nt, ic, n_funcs=None,
          nonlinear_method='newton', tol_nl=1e-8, max_iter_nl=20,
-         verbose_nl=False,
          dirichlet_constraints=None,
-         neumann_constraints=None):
+         neumann_constraints=None, 
+         verbose=False):
     dt = tf / nt
     n  = len(d_vars)
     u  = np.array(ic, dtype=np.float64).flatten()
@@ -104,8 +104,9 @@ def bdf2(flat_list, d_vars, tf, nt, ic, n_funcs=None,
         A_bdf1 = I - dt * L
         A_bdf2 = I - (2.0 * dt / 3.0) * L
     else:
-        print(f"  [BDF2] EDP nao-linear detectada - usando {nonlinear_method.upper()} "
-              f"(tol={tol_nl:.0e}, max_iter={max_iter_nl})")
+        if verbose:
+            print(f"  [BDF2] EDP nao-linear detectada - usando {nonlinear_method.upper()} "
+                  f"(tol={tol_nl:.0e}, max_iter={max_iter_nl})")
         _, fonte_func = extract_linear_structure(funcs, n, verbose=False)
 
     save_to_history(u, final_list, use_groups, n_funcs, n_elements)
@@ -124,13 +125,13 @@ def bdf2(flat_list, d_vars, tf, nt, ic, n_funcs=None,
             u_new, n_iter = newton_step(
                 funcs, u, tempo_1, dt, n, u,
                 alpha=1.0, max_iter=max_iter_nl,
-                tol_nl=tol_nl, verbose=verbose_nl
+                tol_nl=tol_nl, verbose=verbose
             )
         else:
             u_new, n_iter = picard_step(
                 funcs, u, tempo_1, dt, n, u,
                 alpha=1.0, max_iter=max_iter_nl,
-                tol_nl=tol_nl, verbose=verbose_nl
+                tol_nl=tol_nl, verbose=verbose
             )
         total_iters += n_iter
         u_prev = u.copy()
@@ -152,13 +153,13 @@ def bdf2(flat_list, d_vars, tf, nt, ic, n_funcs=None,
                 u_new, n_iter = newton_step(
                     funcs, u, tempo_n1, dt, n, rhs_hist,
                     alpha=2.0/3.0, max_iter=max_iter_nl,
-                    tol_nl=tol_nl, verbose=verbose_nl
+                    tol_nl=tol_nl, verbose=verbose
                 )
             else:
                 u_new, n_iter = picard_step(
                     funcs, u, tempo_n1, dt, n, rhs_hist,
                     alpha=2.0/3.0, max_iter=max_iter_nl,
-                    tol_nl=tol_nl, verbose=verbose_nl
+                    tol_nl=tol_nl, verbose=verbose
                 )
             total_iters += n_iter
             u_prev = u.copy()
@@ -167,9 +168,10 @@ def bdf2(flat_list, d_vars, tf, nt, ic, n_funcs=None,
         save_to_history(u, final_list, use_groups, n_funcs, n_elements)
 
     elapsed = time.time() - t0_loop
-    print(f"  [BDF2] Loop de tempo: {elapsed:.3f}s", end="")
-    if not is_linear:
-        print(f" | Media iteracoes/passo: {total_iters/nt:.1f}", end="")
-    print()
+    if verbose:
+        print(f"  [BDF2] Loop de tempo: {elapsed:.3f}s", end="")
+        if not is_linear:
+            print(f" | Media iteracoes/passo: {total_iters/nt:.1f}", end="")
+        print()
 
     return u, final_list

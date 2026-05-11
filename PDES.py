@@ -65,7 +65,7 @@ class PDES:
         self.dirichlet_constraints = dirichlet_constraints
         self.neumann_constraints   = neumann_constraints
 
-    def solve(self, method='bdf2', tf=1.0, nt=100, tol=1e-6, **kwargs):
+    def solve(self, method='bdf2', tf=1.0, nt=100, tol=1e-6, verbose=False, **kwargs):
         dt = tf / nt
         dc = self.dirichlet_constraints
         nc = getattr(self, 'neumann_constraints', {})
@@ -77,6 +77,7 @@ class PDES:
                 n_funcs=len(self.funcs),
                 dirichlet_constraints=dc,
                 neumann_constraints=nc,
+                verbose=verbose,
                 **kwargs
             )
         elif method == 'CN':
@@ -86,6 +87,7 @@ class PDES:
                 n_funcs=len(self.funcs),
                 dirichlet_constraints=dc,
                 neumann_constraints=nc,
+                verbose=verbose,
                 **kwargs
             )
         elif method == 'RKF':
@@ -103,6 +105,7 @@ class PDES:
                 xn=nt * dt,
                 dirichlet_constraints=dc,
                 neumann_constraints=nc,
+                verbose=verbose
             )
         else:
             raise ValueError(
