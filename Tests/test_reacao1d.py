@@ -1,15 +1,3 @@
-"""
-test_reacao1d.py
-----------------
-Testa o sistema de reação-convecção-difusão 1D (C → D).
-
-Sem solução analítica fechada. Os testes verificam:
-  1. Conservação de massa total (C + D ≈ constante ao longo do tempo)
-  2. Monotonicidade: C decresce, D cresce no tempo
-  3. Estado estacionário atingido: variação entre últimos passos < tol
-  4. Valores físicos: C e D sempre >= 0
-"""
-
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -20,9 +8,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from PDES import PDES
 import PDE
 
-# ---------------------------------------------------------------------------
-# Parâmetros fixos
-# ---------------------------------------------------------------------------
 DISC_N = [15]
 TF     = 5.0
 NT     = 500
@@ -54,20 +39,12 @@ def montar_sistema():
     return sim
 
 
-# ---------------------------------------------------------------------------
-# Fixture — roda o solver uma vez, reutiliza nos testes
-# ---------------------------------------------------------------------------
 @pytest.fixture(scope='module')
 def resultado():
     return montar_sistema()
 
 
-# ---------------------------------------------------------------------------
-# Testes
-# ---------------------------------------------------------------------------
-
 def test_valores_positivos(resultado):
-    """C e D devem ser >= 0 em todos os instantes."""
     _, hist = resultado.results
     C_final = np.array(hist[0][-1])
     D_final = np.array(hist[1][-1])
@@ -76,12 +53,6 @@ def test_valores_positivos(resultado):
 
 
 def test_conservacao_massa(resultado):
-    """
-    Para reação C → D com mesma velocidade e difusão,
-    a massa total (C + D) deve ser aproximadamente conservada
-    na região interior (descontando entrada/saída pelas BCs).
-    Verifica que a variação relativa entre passo inicial e final é < 50%.
-    """
     _, hist = resultado.results
     dx = 1.0 / (DISC_N[0] - 1)
 
@@ -90,14 +61,11 @@ def test_conservacao_massa(resultado):
     massa_final   = (np.trapezoid(np.array(hist[0][-1]), dx=dx) +
                      np.trapezoid(np.array(hist[1][-1]), dx=dx))
 
-    # Massa cresce porque C=1 na entrada (Dirichlet west)
-    # Verifica apenas que não é negativa e que D cresceu
     assert massa_final >= 0, "Massa total negativa — instabilidade numérica"
     assert massa_final > massa_inicial, "Massa deveria crescer (entrada Dirichlet C=1)"
 
 
 def test_d_cresce(resultado):
-    """D deve crescer ao longo do tempo (produto da reação)."""
     _, hist = resultado.results
     dx = 1.0 / (DISC_N[0] - 1)
     massa_d_inicial = np.trapezoid(np.array(hist[1][0]),  dx=dx)
@@ -106,10 +74,6 @@ def test_d_cresce(resultado):
 
 
 def test_estado_estacionario(resultado):
-    """
-    Variação entre os dois últimos passos deve ser pequena,
-    indicando que o sistema está próximo do estado estacionário.
-    """
     _, hist = resultado.results
     C_pen = np.array(hist[0][-2])
     C_fin = np.array(hist[0][-1])
@@ -118,7 +82,6 @@ def test_estado_estacionario(resultado):
 
 
 def test_c_limitado(resultado):
-    """C deve estar entre 0 e 1 (BC de entrada = 1, sem geração)."""
     _, hist = resultado.results
     C_final = np.array(hist[0][-1])
     assert np.all(C_final <= 1.0 + 1e-10), f"C > 1: max={C_final.max():.4f}"

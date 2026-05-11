@@ -1,21 +1,7 @@
-"""
-test_calor.py
--------------
-Testa os 3 solvers na equação do calor 2D.
-
-EDP:
-    ∂F/∂t = α_x·∂²F/∂x² + α_y·∂²F/∂y²
-
-Solução analítica:
-    F(x,y,t) = sin(π·x)·sin(π·y)·exp(-(α_x+α_y)·π²·t)
-
-BCs: Dirichlet homogêneo em todas as bordas.
-CI:  sin(π·x)·sin(π·y)
-"""
 
 import numpy as np
 import matplotlib
-matplotlib.use('Agg')  # sem janelas durante testes
+matplotlib.use('Agg') 
 import pytest
 import os, sys
 
@@ -23,9 +9,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from PDES import PDES
 import PDE
 
-# ---------------------------------------------------------------------------
-# Parâmetros fixos
-# ---------------------------------------------------------------------------
 DISC_N   = [15, 15]
 TF       = 1.0
 NT       = 200
@@ -39,7 +22,6 @@ X, Y = np.meshgrid(x, y, indexing='ij')
 
 
 def solucao_analitica(X, Y, t):
-    """Solução exata: decaimento exponencial do modo fundamental."""
     return np.sin(np.pi * X) * np.sin(np.pi * Y) * np.exp(-(ALPHA_X + ALPHA_Y) * np.pi**2 * t)
 
 
@@ -65,11 +47,6 @@ def montar_sistema():
 
 ref = solucao_analitica(X, Y, TF).flatten()
 
-
-# ---------------------------------------------------------------------------
-# Testes
-# ---------------------------------------------------------------------------
-
 def test_calor_bdf2():
     sim = montar_sistema()
     sim.solve(method='bdf2', tf=TF, nt=NT, tol=1e-8)
@@ -92,15 +69,6 @@ def test_calor_rkf():
 
 
 def test_calor_ordem_bdf2():
-    """
-    Verifica que o BDF2 não piora com refinamento de dt.
-
-    Nota: com disc_n=[15,15] o erro é dominado pelo erro espacial (~2e-4).
-    Dobrar nt reduz o erro temporal mas o espacial permanece — a diferença
-    entre os dois MAEs é ruído numérico (<1%). O teste verifica apenas que
-    o erro não cresce mais que 5% ao refinar dt, o que seria indicativo
-    de instabilidade.
-    """
     sim1 = montar_sistema()
     sim1.solve(method='bdf2', tf=TF, nt=NT, tol=1e-8)
     erro1 = mae(sim1.results[0], ref.reshape(DISC_N[0], DISC_N[1]))

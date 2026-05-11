@@ -11,9 +11,7 @@ import matplotlib.gridspec as gridspec
 from PDES import PDES
 import PDE
 
-# ---------------------------------------------------------------------------
-# Parâmetros
-# ---------------------------------------------------------------------------
+
 disc_n  = [21]
 tf      = 5.0
 nt      = 1000
@@ -49,15 +47,12 @@ PDES1 = PDES([PDE_C, PDE_D], disc_n)
 PDES1.discretize(method="backward")
 PDES1.solve(method='bdf2', tf=tf, nt=nt, tol=1e-6)
 resultado_final_cn = PDES1.results
-# Perfil no instante final (ou qualquer time_step)
-PDES1.visualize(mode='plot1d', func_idx=0)
-PDES1.visualize(mode='plot1d', func_idx=0, time_step=0)  # instante inicial
 
-# Todos os perfis sobrepostos com gradiente de cor temporal
+PDES1.visualize(mode='plot1d', func_idx=0)
+PDES1.visualize(mode='plot1d', func_idx=0, time_step=0)
+
 PDES1.visualize(mode='plot1d_all', func_idx=0, n_profiles=10, tf=5.0, cmap='plasma')
 
-# Heatmap x vs t — vê a evolução inteira de uma vez
 PDES1.visualize(mode='heatmap1d', func_idx=0, tf=5.0, cmap='viridis')
 
-# Animação
 PDES1.visualize(mode='animation1d', func_idx=1, tf=5.0, interval=5)

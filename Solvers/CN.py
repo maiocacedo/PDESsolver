@@ -1,17 +1,7 @@
-"""
-CN.py
------
-Solver Crank-Nicolson com suporte a EDPs lineares e não-lineares.
-
-Para EDPs lineares: L é fixado uma vez (rápido).
-Para EDPs não-lineares: itera via Newton (padrão) ou Picard a cada passo.
-
-Fórmula CN:
-    (I - dt/2 * L) * u^{n+1} = (I + dt/2 * L) * u^n + dt/2 * (f^n + f^{n+1})
-"""
-
 import time
 import numpy as np
+import sympy as sp
+from sympy.parsing.sympy_parser import parse_expr
 import scipy.sparse as sp_sparse
 from scipy.sparse.linalg import spsolve
 
@@ -22,66 +12,84 @@ from .solver_base import (
 )
 
 
+def _make_bc_lambda(expr_str: str):
+    t_sym, x_sym, y_sym = sp.symbols('t x y')
+    expr = parse_expr(expr_str)
+    return sp.lambdify((t_sym, x_sym, y_sym), expr, modules='numpy')
+
+
 def cn(flat_list, d_vars, tf, nt, ic, n_funcs=None,
        nonlinear_method='newton', tol_nl=1e-8, max_iter_nl=20,
-       verbose_nl=False, dirichlet_constraints=None):
-    """
-    Solver Crank-Nicolson.
-
-    Parâmetros
-    ----------
-    flat_list : list[str]
-    d_vars : list[str]
-    tf : float
-    nt : int
-    ic : array-like
-    n_funcs : int, opcional
-    nonlinear_method : str  ('newton' ou 'picard')
-    tol_nl : float
-    max_iter_nl : int
-    verbose_nl : bool
-    dirichlet_constraints : dict[int, dict] | None
-        {idx: {'expr': str, 'x': float, 'y': float}}
-
-    Retorna
-    -------
-    u : np.ndarray
-    final_list : list[list]
-    """
-    import math
-
+       verbose_nl=False,
+       dirichlet_constraints=None,
+       neumann_constraints=None):
     dt = tf / nt
     n  = len(d_vars)
     u  = np.array(ic, dtype=np.float64).flatten()
 
     dirichlet_constraints = dirichlet_constraints or {}
+    neumann_constraints   = neumann_constraints   or {}
+
+    dirichlet_lambdas = {
+        idx: _make_bc_lambda(info['expr'])
+        for idx, info in dirichlet_constraints.items()
+    }
+    neumann_lambdas = {
+        idx: _make_bc_lambda(info['expr'])
+        for idx, info in neumann_constraints.items()
+    }
+
+    h_neumann = None
+    if neumann_constraints:
+        all_x = set(); all_y = set()
+        for info in dirichlet_constraints.values():
+            all_x.add(round(info['x'], 12))
+            all_y.add(round(info['y'], 12))
+        for info in neumann_constraints.values():
+            all_x.add(round(info['x'], 12))
+            all_y.add(round(info['y'], 12))
+        Nx_est = len(all_x); Ny_est = len(all_y)
+        if Nx_est >= 2:
+            h_neumann = 1.0 / (Nx_est - 1)
+        elif Ny_est >= 2:
+            h_neumann = 1.0 / (Ny_est - 1)
+        else:
+            raise RuntimeError(
+                "Nao foi possivel inferir o passo h da malha para Neumann."
+            )
 
     def _apply_dirichlet(u, t_val):
         for idx, info in dirichlet_constraints.items():
-            try:
-                u[idx] = float(eval(
-                    info['expr'],
-                    {'t': t_val, 'x': info['x'], 'y': info['y'],
-                     'exp': math.exp, 'sin': math.sin, 'cos': math.cos,
-                     'pi': math.pi, '__builtins__': {}}
-                ))
-            except Exception:
-                try:
-                    u[idx] = float(info['expr'])
-                except Exception:
-                    pass
+            f = dirichlet_lambdas[idx]
+            u[idx] = float(f(t_val, info['x'], info['y']))
         return u
 
-    u = _apply_dirichlet(u, 0.0)
+    def _apply_neumann(u, t_val):
+        if h_neumann is None:
+            return u
+        two_h = 2.0 * h_neumann
+        for idx, info in neumann_constraints.items():
+            f = neumann_lambdas[idx]
+            f_val = float(f(t_val, info['x'], info['y']))
+            u[idx] = (4.0 * u[info['idx_n1']]
+                      - u[info['idx_n2']]
+                      + two_h * f_val) / 3.0
+        return u
+
+    def _apply_bcs(u, t_val):
+        u = _apply_dirichlet(u, t_val)
+        u = _apply_neumann(u, t_val)
+        return u
+
+    u = _apply_bcs(u, 0.0)
 
     final_list, use_groups, n_elements = make_history(n_funcs, n)
 
-    # --- Compilação ---
     funcs = compile_equations(flat_list, d_vars)
 
-    # --- Detecção de linearidade (excluindo nós Dirichlet) ---
+    overwrite_indices = list(dirichlet_constraints.keys()) + list(neumann_constraints.keys())
     is_linear, L = detect_linearity(funcs, n,
-                                    dirichlet_indices=list(dirichlet_constraints.keys()))
+                                    dirichlet_indices=overwrite_indices)
 
     I = sp_sparse.eye(n, format='csr')
 
@@ -90,13 +98,12 @@ def cn(flat_list, d_vars, tf, nt, ic, n_funcs=None,
         A_impl = I - (dt / 2.0) * L
         A_expl = I + (dt / 2.0) * L
     else:
-        print(f"  [CN] EDP não-linear detectada — usando {nonlinear_method.upper()} "
+        print(f"  [CN] EDP nao-linear detectada - usando {nonlinear_method.upper()} "
               f"(tol={tol_nl:.0e}, max_iter={max_iter_nl})")
         _, fonte_func = extract_linear_structure(funcs, n, verbose=False)
 
     save_to_history(u, final_list, use_groups, n_funcs, n_elements)
 
-    # --- Loop de tempo ---
     t0 = time.time()
     total_iters = 0
 
@@ -109,7 +116,7 @@ def cn(flat_list, d_vars, tf, nt, ic, n_funcs=None,
             f_n1 = fonte_func(tempo_proximo)
             rhs  = A_expl.dot(u) + (dt / 2.0) * (f_n + f_n1)
             u    = spsolve(A_impl, rhs)
-            u    = _apply_dirichlet(u, tempo_proximo)
+            u    = _apply_bcs(u, tempo_proximo)
 
         else:
             F_n      = eval_F(funcs, tempo_atual, u)
@@ -127,7 +134,7 @@ def cn(flat_list, d_vars, tf, nt, ic, n_funcs=None,
                     alpha=0.5, max_iter=max_iter_nl,
                     tol_nl=tol_nl, verbose=verbose_nl
                 )
-            u = _apply_dirichlet(u, tempo_proximo)
+            u = _apply_bcs(u, tempo_proximo)
             total_iters += n_iter
 
         save_to_history(u, final_list, use_groups, n_funcs, n_elements)
@@ -135,7 +142,7 @@ def cn(flat_list, d_vars, tf, nt, ic, n_funcs=None,
     elapsed = time.time() - t0
     print(f"  [CN] Loop de tempo: {elapsed:.3f}s", end="")
     if not is_linear:
-        print(f" | Média iterações/passo: {total_iters/nt:.1f}", end="")
+        print(f" | Media iteracoes/passo: {total_iters/nt:.1f}", end="")
     print()
 
     return u, final_list

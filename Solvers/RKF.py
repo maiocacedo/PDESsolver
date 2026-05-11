@@ -1,20 +1,4 @@
-"""
-RKF.py
-------
-Solver RKF45 (Dormand-Prince) otimizado para GPU via CuPy.
-
-Melhorias em relação à versão anterior:
-- Buffer pré-alocado para saída de F_all (sem cp.stack a cada avaliação)
-- Sincronização CPU<->GPU reduzida: apenas uma .get() por passo aceito
-- Norma de erro mista (L2 relativa + absoluta) mais robusta para sistemas grandes
-- Limite de iterações com aviso para evitar loop infinito
-- Correção: acos mapeado para cp.arccos (era cp.arctan por engano)
-- Fator de segurança adaptativo com memória do passo anterior (PI controller)
-- Reaplicação de BCs Dirichlet após cada passo aceito (suporte a f(x,y,t))
-"""
-
 import ctypes
-import math as _math
 import os
 import re
 import sys
@@ -25,11 +9,6 @@ import sympy as sp
 from sympy.parsing.sympy_parser import parse_expr
 
 from Auxs.FuncAux import symbol_references
-
-
-# ---------------------------------------------------------------------------
-# Fix CuPy path (Windows com acentos no caminho)
-# ---------------------------------------------------------------------------
 
 def _fix_cupy_path():
     if sys.platform != 'win32':
@@ -64,16 +43,11 @@ def _fix_cupy_path():
         _compiler.compile_using_nvrtc = _patched
 
     except Exception as e:
-        warnings.warn(f"[PDESsolver] Não foi possível corrigir o path do CuPy: {e}")
+        warnings.warn(f"[PDESsolver] Nao foi possivel corrigir o path do CuPy: {e}")
 
 
 _fix_cupy_path()
 import cupy as cp
-
-
-# ---------------------------------------------------------------------------
-# Utilitários
-# ---------------------------------------------------------------------------
 
 def natural_sort_key(s):
     return [int(text) if text.isdigit() else text.lower()
@@ -87,11 +61,6 @@ def get_short_path(path):
     ctypes.windll.kernel32.GetShortPathNameW(path, buf, 512)
     return buf.value or path
 
-
-# ---------------------------------------------------------------------------
-# Mapa CuPy
-# ---------------------------------------------------------------------------
-
 CUPY_MAP = {
     'sin':   cp.sin,   'cos':   cp.cos,   'tan':   cp.tan,
     'asin':  cp.arcsin, 'acos': cp.arccos, 'atan':  cp.arctan, 'atan2': cp.arctan2,
@@ -104,9 +73,10 @@ CUPY_MAP = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Solver principal
-# ---------------------------------------------------------------------------
+def _make_bc_lambda(expr_str: str):
+    t_sym, x_sym, y_sym = sp.symbols('t x y')
+    expr = parse_expr(expr_str)
+    return sp.lambdify((t_sym, x_sym, y_sym), expr, modules='numpy')
 
 def SERKF45_cuda(
     oldexpr, ivar, funcs, yn, x0, xn, n, n_funcs, sp_vars,
@@ -114,46 +84,64 @@ def SERKF45_cuda(
     atol=1e-6, rtol=None,
     max_steps=10_000_000,
     dirichlet_constraints=None,
+    neumann_constraints=None,
 ):
-    """
-    Solver RKF45 (Dormand-Prince) com controle adaptativo de passo.
-
-    Parâmetros
-    ----------
-    atol : float
-        Tolerância absoluta para o erro misto (padrão: 1e-6).
-    rtol : float | None
-        Tolerância relativa. Se None, usa o valor de `tol`.
-    max_steps : int
-        Limite de passos para evitar loop infinito (padrão: 10_000_000).
-    dirichlet_constraints : dict[int, dict] | None
-        {idx: {'expr': str, 'x': float, 'y': float}}
-        Reaplicado após cada passo aceito.
-    """
     if rtol is None:
         rtol = tol
 
     dirichlet_constraints = dirichlet_constraints or {}
+    neumann_constraints   = neumann_constraints   or {}
+
+    dirichlet_lambdas = {
+        idx: _make_bc_lambda(info['expr'])
+        for idx, info in dirichlet_constraints.items()
+    }
+    neumann_lambdas = {
+        idx: _make_bc_lambda(info['expr'])
+        for idx, info in neumann_constraints.items()
+    }
+
+    h_neumann = None
+    if neumann_constraints:
+        all_x = set(); all_y = set()
+        for info in dirichlet_constraints.values():
+            all_x.add(round(info['x'], 12))
+            all_y.add(round(info['y'], 12))
+        for info in neumann_constraints.values():
+            all_x.add(round(info['x'], 12))
+            all_y.add(round(info['y'], 12))
+        Nx_est = len(all_x); Ny_est = len(all_y)
+        if Nx_est >= 2:
+            h_neumann = 1.0 / (Nx_est - 1)
+        elif Ny_est >= 2:
+            h_neumann = 1.0 / (Ny_est - 1)
+        else:
+            raise RuntimeError(
+                "Nao foi possivel inferir o passo h da malha para Neumann."
+            )
 
     def _apply_dirichlet_gpu(y_gpu, t_val):
         for idx, info in dirichlet_constraints.items():
-            try:
-                val = float(eval(
-                    info['expr'],
-                    {'t': t_val, 'x': info['x'], 'y': info['y'],
-                     'exp': _math.exp, 'sin': _math.sin, 'cos': _math.cos,
-                     'pi': _math.pi, '__builtins__': {}}
-                ))
-            except Exception:
-                try:
-                    val = float(info['expr'])
-                except Exception:
-                    continue
+            f = dirichlet_lambdas[idx]
+            val = float(f(t_val, info['x'], info['y']))
             y_gpu[idx] = val
 
-    # -----------------------------------------------------------------------
-    # 1. Símbolos e compilação
-    # -----------------------------------------------------------------------
+    def _apply_neumann_gpu(y_gpu, t_val):
+        if h_neumann is None:
+            return
+        two_h = 2.0 * h_neumann
+        
+        for idx, info in neumann_constraints.items():
+            f = neumann_lambdas[idx]
+            f_val = float(f(t_val, info['x'], info['y']))
+            u_n1 = float(y_gpu[info['idx_n1']])
+            u_n2 = float(y_gpu[info['idx_n2']])
+            y_gpu[idx] = (4.0 * u_n1 - u_n2 + two_h * f_val) / 3.0
+
+    def _apply_bcs_gpu(y_gpu, t_val):
+        _apply_dirichlet_gpu(y_gpu, t_val)
+        _apply_neumann_gpu(y_gpu, t_val)
+
     olddvar = sorted(symbol_references(funcs), key=natural_sort_key)
     oldivar = symbol_references(ivar)
     sym_map = {name: sp.Symbol(name) for name in (oldivar + olddvar)}
@@ -175,17 +163,14 @@ def SERKF45_cuda(
             _out_buf[k] = out[k]
         return _out_buf
 
-    # -----------------------------------------------------------------------
-    # 2. Estado inicial e histórico
-    # -----------------------------------------------------------------------
     dtype = cp.float64
     print(f"Integrando {m} EDOs com SERKF45 (CUDA)...")
 
     y = cp.asarray(yn, dtype=dtype).reshape(m,)
     if y.size != m:
-        raise ValueError(f"len(yn) ({y.size}) != número de EDOs ({m}).")
+        raise ValueError(f"len(yn) ({y.size}) != numero de EDOs ({m}).")
 
-    _apply_dirichlet_gpu(y, float(x0))
+    _apply_bcs_gpu(y, float(x0))
 
     use_history = n_funcs and (m % n_funcs == 0)
     n_elements  = (m // n_funcs) if use_history else m
@@ -199,9 +184,6 @@ def SERKF45_cuda(
 
     save_history(y)
 
-    # -----------------------------------------------------------------------
-    # 3. Passo inicial
-    # -----------------------------------------------------------------------
     h = dtype(float(dt_init) if dt_init is not None else (xn - x0) / max(int(n), 1))
 
     def clamp_h(h_, t_, t1_, dt_max_):
@@ -215,9 +197,7 @@ def SERKF45_cuda(
     t1 = dtype(float(xn))
     h  = clamp_h(h, t, t1, dt_max)
 
-    # -----------------------------------------------------------------------
-    # 4. Coeficientes Dormand-Prince
-    # -----------------------------------------------------------------------
+    
     c2, c3, c4, c5, c6         = 1/4, 3/8, 12/13, 1.0, 1/2
     a21                        = 1/4
     a31, a32                   = 3/32, 9/32
@@ -227,9 +207,6 @@ def SERKF45_cuda(
     b1,  b3,  b4,  b5,  b6    = 16/135, 6656/12825, 28561/56430, -9/50, 2/55
     b1s, b3s, b4s, b5s         = 25/216, 1408/2565, 2197/4104, -1/5
 
-    # -----------------------------------------------------------------------
-    # 5. Buffers pré-alocados
-    # -----------------------------------------------------------------------
     k1 = cp.empty(m, dtype=dtype); k2 = cp.empty(m, dtype=dtype)
     k3 = cp.empty(m, dtype=dtype); k4 = cp.empty(m, dtype=dtype)
     k5 = cp.empty(m, dtype=dtype); k6 = cp.empty(m, dtype=dtype)
@@ -240,15 +217,12 @@ def SERKF45_cuda(
     n_steps   = 0
     n_reject  = 0
 
-    # -----------------------------------------------------------------------
-    # 6. Loop principal
-    # -----------------------------------------------------------------------
     while float(t) < float(t1) - 1e-14:
 
         if n_steps >= max_steps:
             warnings.warn(
                 f"[SERKF45] Limite de {max_steps} passos atingido em t={float(t):.4f}. "
-                f"Verifique a tolerância ou aumente max_steps."
+                f"Verifique a tolerancia ou aumente max_steps."
             )
             break
 
@@ -271,7 +245,7 @@ def SERKF45_cuda(
         if err <= 1.0:
             cp.copyto(y, y5)
             t = t + h
-            _apply_dirichlet_gpu(y, float(t))
+            _apply_bcs_gpu(y, float(t))
             n_steps += 1
             save_history(y)
 

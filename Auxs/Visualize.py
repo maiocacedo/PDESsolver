@@ -1,57 +1,11 @@
-"""
-Visualize.py
-------------
-Módulo de visualização para o framework PDES.
-
-Contém todas as funções de plot, heatmap e animação,
-separadas do PDES.py para modularidade.
-
-Uso: não é chamado diretamente — PDES.visualize() delega para cá.
-"""
 
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 
 
-# ---------------------------------------------------------------------------
-# Roteador principal
-# ---------------------------------------------------------------------------
-
 def visualize(pdes_obj, mode='heatmap', func_idx=0, time_step=-1, **kwargs):
-    """
-    Roteador principal de visualização.
-
-    Detecta automaticamente se o problema é 1D ou 2D pelo disc_n
-    e chama o modo correto.
-
-    Modos 1D
-    --------
-    'plot1d'       : perfil espacial num instante (padrão: último)
-    'plot1d_all'   : perfis sobrepostos com gradiente de cor temporal
-    'heatmap1d'    : heatmap x vs t (imshow)
-    'animation1d'  : animação do perfil evoluindo no tempo
-
-    Modos 2D
-    --------
-    'heatmap'      : contourf no instante escolhido
-    'plot3d'       : superfície 3D no instante escolhido
-    'animation'    : animação 2D (contourf)
-    'animation3d'  : animação 3D (surface)
-
-    kwargs comuns
-    -------------
-    cmap        : str   — mapa de cores
-    tf          : float — tempo final real (para eixos temporais)
-    time_step   : int   — índice do passo a plotar (padrão: -1 = último)
-    frames_step : int   — passo entre frames nas animações
-    interval    : int   — ms entre frames
-    n_profiles  : int   — número de perfis em plot1d_all (padrão: 10)
-    color       : str   — cor da linha em plot1d e animation1d
-    lw          : float — espessura da linha
-    alpha       : float — transparência (modos 3D)
-    elev, azim  : float — ângulos da câmera (modos 3D)
-    """
+    
     if pdes_obj.results is None:
         print("Erro: rode .solve() antes de visualizar.")
         return
@@ -62,7 +16,6 @@ def visualize(pdes_obj, mode='heatmap', func_idx=0, time_step=-1, **kwargs):
         print("Erro: histórico vazio.")
         return
 
-    # --- 1D ---
     if _is_1d(pdes_obj):
         x = _get_x1d(pdes_obj)
         if mode in ('plot1d', 'plot'):
@@ -78,7 +31,6 @@ def visualize(pdes_obj, mode='heatmap', func_idx=0, time_step=-1, **kwargs):
                   f"Use: 'plot1d', 'plot1d_all', 'heatmap1d', 'animation1d'.")
         return
 
-    # --- 2D ---
     nx, ny = pdes_obj.disc_n
     x = np.linspace(0, 1, nx)
     y = np.linspace(0, 1, ny)
@@ -97,10 +49,6 @@ def visualize(pdes_obj, mode='heatmap', func_idx=0, time_step=-1, **kwargs):
               f"Use: 'heatmap', 'animation', 'plot3d', 'animation3d'.")
 
 
-# ---------------------------------------------------------------------------
-# Helpers internos
-# ---------------------------------------------------------------------------
-
 def _is_1d(pdes_obj):
     return len(pdes_obj.disc_n) == 1
 
@@ -110,12 +58,7 @@ def _get_x1d(pdes_obj):
     return np.linspace(a, b, pdes_obj.disc_n[0])
 
 
-# ---------------------------------------------------------------------------
-# Modos 1D
-# ---------------------------------------------------------------------------
-
 def plot1d(historico, x, funcs, func_idx, time_step, **kwargs):
-    """Perfil espacial num único instante de tempo."""
     color = kwargs.get('color', 'steelblue')
     lw    = kwargs.get('lw', 2)
 
@@ -134,10 +77,6 @@ def plot1d(historico, x, funcs, func_idx, time_step, **kwargs):
 
 
 def plot1d_all(historico, x, funcs, func_idx, **kwargs):
-    """
-    Sobrepõe n_profiles perfis igualmente espaçados no tempo,
-    coloridos por um colormap temporal.
-    """
     n_profiles = kwargs.get('n_profiles', 10)
     cmap       = kwargs.get('cmap', 'viridis')
     lw         = kwargs.get('lw', 1.5)
@@ -201,7 +140,6 @@ def heatmap1d(historico, x, funcs, pdes, func_idx, **kwargs):
 
 
 def animate1d(historico, x, funcs, func_idx, **kwargs):
-    """Animação do perfil 1D evoluindo no tempo."""
     frames_step = kwargs.get('frames_step', 1)
     interval    = kwargs.get('interval', 50)
     color       = kwargs.get('color', 'steelblue')
@@ -238,11 +176,6 @@ def animate1d(historico, x, funcs, func_idx, **kwargs):
                          interval=interval, blit=True)
     plt.tight_layout()
     plt.show()
-
-
-# ---------------------------------------------------------------------------
-# Modos 2D
-# ---------------------------------------------------------------------------
 
 def plot_heatmap(historico, X, Y, funcs, disc_n, func_idx, time_step):
     data = np.array(historico[func_idx][time_step]).reshape(disc_n)

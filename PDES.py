@@ -10,47 +10,22 @@ matplotlib.use('TkAgg')
 
 
 class PDES:
-    """
-    Orquestrador de sistemas de EDPs.
-
-    API pública (visível ao usuário via sim.)
-    -----------------------------------------
-    .funcs      : list[str]  — nomes das funções ['U', 'V', ...]
-    .disc_n     : list[int]  — pontos da malha
-    .sp_vars    : list[str]  — variáveis espaciais
-    .ic         : list       — condição inicial numérica
-    .results    : tuple      — (u_final, historico) após .solve()
-
-    .discretize(method)
-    .solve(method, tf, nt, tol)
-    .visualize(mode, func_idx, ...)
-
-    Atributos internos (usados por Disc.py e Solvers — não tocar)
-    --------------------------------------------------------------
-    .eqs, .ivars, .pdes, .disc_results, .dirichlet_constraints
-    """
 
     def __init__(self, pdes, disc_n, n_sp=1, n_temp=1):
-        # ── usados internamente por Disc.py (não renomear) ──
         self.pdes    = pdes
         self.eqs     = [pde.eq   for pde in pdes]
         self.ivars   = pdes[0].ivar
-        self.disc_results         = None
+        self.disc_results          = None
         self.dirichlet_constraints = {}
+        self.neumann_constraints   = {}
 
-        # ── API pública ─────────────────────────────────────
         self.funcs   = [pde.func for pde in pdes]
         self.sp_vars = pdes[0].sp_var
         self.disc_n  = disc_n
         self.ic      = self._ic_calc(pdes)
         self.results = None
 
-    # -----------------------------------------------------------------------
-    # Interno
-    # -----------------------------------------------------------------------
-
     def _ic_calc(self, pdes):
-        """Calcula a condição inicial numérica para cada PDE no grid."""
         all_ics = []
         for pde in pdes:
             expr       = sp.parse_expr(pde.expr_ic)
@@ -68,23 +43,13 @@ class PDES:
         return all_ics
 
     def xs(self, vars):
-        """Gera nomes internos das variáveis discretizadas (XX0, XX1, ...)."""
         nvars = vars.copy()
         for i in range(len(nvars)):
             nvars[i] = f'XX{i}'
         return nvars
 
-    # -----------------------------------------------------------------------
-    # API pública
-    # -----------------------------------------------------------------------
-
     def discretize(self, method='central'):
-        """
-        Discretiza o sistema de EDPs por diferenças finitas.
-
-        method : 'central' | 'forward' | 'backward'
-        """
-        flat_list, d_vars, dirichlet_constraints = df(
+        flat_list, d_vars, dirichlet_constraints, neumann_constraints = df(
             self, self.disc_n,
             method=method,
             west_bd       = [pde.west_bd       for pde in self.pdes],
@@ -98,32 +63,30 @@ class PDES:
         )
         self.disc_results          = (flat_list, d_vars)
         self.dirichlet_constraints = dirichlet_constraints
+        self.neumann_constraints   = neumann_constraints
 
     def solve(self, method='bdf2', tf=1.0, nt=100, tol=1e-6, **kwargs):
-        """
-        Resolve o sistema de EDPs.
-
-        method : 'bdf2' (padrão) | 'CN' | 'RKF'
-        tf     : tempo final
-        nt     : número de passos
-        tol    : tolerância Newton/Picard
-        """
         dt = tf / nt
         dc = self.dirichlet_constraints
+        nc = getattr(self, 'neumann_constraints', {})
 
         if method == 'bdf2':
             self.results = bdf2(
                 self.disc_results[0], self.disc_results[1],
                 tf=tf, nt=nt, ic=self.ic,
                 n_funcs=len(self.funcs),
-                dirichlet_constraints=dc, **kwargs
+                dirichlet_constraints=dc,
+                neumann_constraints=nc,
+                **kwargs
             )
         elif method == 'CN':
             self.results = cn(
                 self.disc_results[0], self.disc_results[1],
                 tf=tf, nt=nt, ic=self.ic,
                 n_funcs=len(self.funcs),
-                dirichlet_constraints=dc, **kwargs
+                dirichlet_constraints=dc,
+                neumann_constraints=nc,
+                **kwargs
             )
         elif method == 'RKF':
             self.results = SERKF45.SERKF45_cuda(
@@ -138,25 +101,20 @@ class PDES:
                 tol=tol,
                 x0=0,
                 xn=nt * dt,
-                dirichlet_constraints=dc
+                dirichlet_constraints=dc,
+                neumann_constraints=nc,
             )
         else:
             raise ValueError(
-                f"Método '{method}' desconhecido. Use: 'bdf2', 'CN' ou 'RKF'."
+                f"Metodo '{method}' desconhecido. Use: 'bdf2', 'CN' ou 'RKF'."
             )
         return self.results
 
     def visualize(self, mode='heatmap', func_idx=0, time_step=-1, **kwargs):
-        """
-        Visualiza os resultados.
-
-        Modos 1D : 'plot1d', 'plot1d_all', 'heatmap1d', 'animation1d'
-        Modos 2D : 'heatmap', 'plot3d', 'animation', 'animation3d'
-        """
         _visualize(self, mode=mode, func_idx=func_idx,
                    time_step=time_step, **kwargs)
 
     def __repr__(self):
-        status = 'resolvido' if self.results is not None else 'não resolvido'
+        status = 'resolvido' if self.results is not None else 'nao resolvido'
         return (f"PDES(funcs={self.funcs}, disc_n={self.disc_n}, "
                 f"sp_vars={self.sp_vars}, status='{status}')")

@@ -1,30 +1,3 @@
-"""
-solver_base.py
---------------
-Utilitários compartilhados entre CN e BDF2.
-
-Responsabilidades:
-- Compilação das equações (lambdify)
-- Detecção automática de linearidade
-- Extração numérica da matriz L por perturbação
-- Iteração de Picard e Newton para EDPs não-lineares
-- Gerenciamento do histórico de solução
-
-Melhoria aplicada vs versão original
---------------------------------------
-_jacobian_sparse_colored: montagem de rows_J/cols_J/vals_J.
-
-Original: getcol(j) + extend() em loop Python
-  → getcol() reconstrói uma coluna esparsa a cada chamada
-  → para n=450: ~31ms por chamada ao Jacobiano
-
-Novo: acesso direto a indptr/indices do formato CSC + arrays pré-alocados
-  → indptr/indices são slices O(1) de arrays já existentes
-  → estrutura CSC cacheada por id(sparsity) — convertida só uma vez
-  → para n=450: ~1ms por chamada ao Jacobiano
-  → speedup: ~30x, sem custo de setup, sem JIT, sem cache externo
-"""
-
 import time
 import warnings
 import numpy as np
@@ -33,20 +6,7 @@ from sympy.parsing.sympy_parser import parse_expr
 import scipy.sparse as sp_sparse
 from scipy.sparse.linalg import spsolve
 
-
-# ---------------------------------------------------------------------------
-# Compilação
-# ---------------------------------------------------------------------------
-
 def compile_equations(flat_list, d_vars, verbose=True):
-    """
-    Compila cada equação como uma função lambdify f(t, *XX).
-
-    Retorna
-    -------
-    funcs : list[callable]
-        Uma função por equação. Assinatura: f(t, *u_vec) -> float
-    """
     t0 = time.time()
     t_sym    = sp.Symbol('t')
     sym_list = [sp.Symbol(v) for v in d_vars]
@@ -61,32 +21,14 @@ def compile_equations(flat_list, d_vars, verbose=True):
         print(f"  Compilação lambdify: {time.time()-t0:.3f}s")
     return funcs
 
-
-# ---------------------------------------------------------------------------
-# Detecção de linearidade
-# ---------------------------------------------------------------------------
-
 def detect_linearity(funcs, n, t0_val=0.0, verbose=True,
                      dirichlet_indices=None):
-    """
-    Verifica se as equações são lineares nas variáveis discretizadas XX.
-
-    Estratégia: extrai L em u=0 (1 _extract_L completa), depois verifica
-    linearidade por amostragem: F(u_rand) ≈ L@u_rand + F(0) para 3 u aleatórios.
-
-    Vantagens vs método original (2 × _extract_L):
-    - 2× mais rápido (1 _extract_L em vez de 2)
-    - Mais robusto: o método 2×_extract_L detecta falsamente "não-linear"
-      para FHN porque diferenças finitas em u=1 têm erro numérico maior
-      perto de raízes de derivadas (ex: d/du(u-u^3/3)|_{u=1} = 0).
-    """
     t0 = time.time()
     zeros = np.zeros(n)
 
     L0, fonte = _extract_L(funcs, n, zeros, t0_val)
-    F0 = fonte  # F(t=0, u=0)
+    F0 = fonte  
 
-    # Verifica linearidade com 3 u aleatórios reproduzíveis
     rng = np.random.default_rng(42)
     is_linear = True
     for _ in range(3):
@@ -109,9 +51,6 @@ def detect_linearity(funcs, n, t0_val=0.0, verbose=True,
 
 
 def _extract_L(funcs, n, u_ref, t_val, eps=1e-6):
-    """
-    Extrai a matriz jacobiana L = dF/du por diferenças finitas.
-    """
     F_ref  = np.array([f(t_val, *u_ref) for f in funcs], dtype=np.float64)
     fonte  = np.array([f(t_val, *np.zeros(n)) for f in funcs], dtype=np.float64)
 
@@ -135,15 +74,6 @@ def _extract_L(funcs, n, u_ref, t_val, eps=1e-6):
 
 
 def extract_linear_structure(funcs, n, t0_val=0.0, verbose=True):
-    """
-    Extrai L (linearização em u=0) e retorna a função de fonte.
-
-    Otimização: detecta se fonte depende de t avaliando em t=0 e t=1.
-    - Se não depende: pré-computa o vetor uma vez → custo zero no loop.
-    - Se depende: avalia apenas as equações que realmente variam com t,
-      mantendo o restante constante → reduz custo proporcional à fração
-      de equações com fonte não-constante (tipicamente muito pequena).
-    """
     t0 = time.time()
     L, _ = _extract_L(funcs, n, np.zeros(n), t0_val)
 
@@ -153,7 +83,6 @@ def extract_linear_structure(funcs, n, t0_val=0.0, verbose=True):
     t_dependent = np.where(np.abs(F1 - F0) > 1e-14)[0]
 
     if len(t_dependent) == 0:
-        # fonte constante — pré-computa uma vez, zero custo no loop
         _fonte_const = F0.copy()
         def fonte_func(t_val):
             return _fonte_const
@@ -161,7 +90,6 @@ def extract_linear_structure(funcs, n, t0_val=0.0, verbose=True):
             print(f"  Extração estrutura A: {time.time()-t0:.3f}s  "
                   f"[fonte constante — pré-computada]")
     else:
-        # avalia só as equações que dependem de t
         _fonte_const  = F0.copy()
         _t_dep_idx    = t_dependent
         _t_dep_funcs  = [funcs[i] for i in t_dependent]
@@ -176,15 +104,7 @@ def extract_linear_structure(funcs, n, t0_val=0.0, verbose=True):
 
     return L, fonte_func
 
-
-# ---------------------------------------------------------------------------
-# Esparsidade e coloração de grafo
-# ---------------------------------------------------------------------------
-
 def _detect_sparsity_pattern(funcs, n, t_val=0.0, eps=1e-6):
-    """
-    Detecta o padrão de esparsidade da jacobiana dF/du e colore as colunas.
-    """
     u_ref = np.zeros(n)
     F_ref = np.array([f(t_val, *u_ref) for f in funcs], dtype=np.float64)
 
@@ -219,21 +139,9 @@ def _detect_sparsity_pattern(funcs, n, t_val=0.0, eps=1e-6):
 
 def _jacobian_sparse_colored(funcs, n, u_k, t_val, sparsity, colors, n_colors,
                               eps=1e-6, _csc_cache={}):
-    """
-    Calcula J_F = dF/du usando coloração de grafo.
 
-    Melhoria vs original: montagem via indptr/indices do CSC pré-cacheado
-    em vez de getcol() + extend() em loop Python.
-
-    getcol(j) reconstrói uma coluna esparsa a cada chamada (~31ms/Jacobiano
-    para n=450). O acesso direto a indptr/indices é O(1) por coluna e a
-    estrutura CSC é convertida e cacheada uma única vez por sparsity.
-
-    Speedup: ~30x na montagem do Jacobiano.
-    """
     F_k = np.array([f(t_val, *u_k) for f in funcs], dtype=np.float64)
 
-    # Converte e cacheia CSC na primeira chamada para esta sparsity
     sp_id = id(sparsity)
     if sp_id not in _csc_cache:
         sp_csc   = sparsity.tocsc()
@@ -243,7 +151,6 @@ def _jacobian_sparse_colored(funcs, n, u_k, t_val, sparsity, colors, n_colors,
     else:
         col_rows = _csc_cache[sp_id]
 
-    # Arrays pré-alocados (evita append em loop)
     all_rows = np.empty(sparsity.nnz, dtype=np.int32)
     all_cols = np.empty(sparsity.nnz, dtype=np.int32)
     all_vals = np.empty(sparsity.nnz, dtype=np.float64)
@@ -273,25 +180,12 @@ def _jacobian_sparse_colored(funcs, n, u_k, t_val, sparsity, colors, n_colors,
     return J_F, F_k
 
 
-# ---------------------------------------------------------------------------
-# Avaliação vetorial de F
-# ---------------------------------------------------------------------------
-
 def eval_F(funcs, t_val, u):
-    """Avalia F(t, u) — o lado direito das EDOs no ponto u."""
     return np.array([f(float(t_val), *u) for f in funcs], dtype=np.float64)
-
-
-# ---------------------------------------------------------------------------
-# Iteração de Picard
-# ---------------------------------------------------------------------------
 
 def picard_step(funcs, u, t_new, dt, n, rhs_hist,
                 alpha, max_iter=50, tol_nl=1e-8, verbose=False):
-    """
-    Resolve um passo implícito via iteração de Picard.
-    alpha: 0.5 para CN, 2/3 para BDF2.
-    """
+    
     I   = sp_sparse.eye(n, format='csr')
     u_k = u.copy()
 
@@ -314,22 +208,9 @@ def picard_step(funcs, u, t_new, dt, n, rhs_hist,
                   f"(||res||={res:.2e}). Usando último iterate.")
     return u_k, max_iter
 
-
-# ---------------------------------------------------------------------------
-# Iteração de Newton  (com jacobiana esparsa por coloração)
-# ---------------------------------------------------------------------------
-
 def newton_step(funcs, u, t_new, dt, n, rhs_hist,
                 alpha, max_iter=20, tol_nl=1e-8, eps=1e-6, verbose=False,
                 _cache={}):
-    """
-    Resolve um passo implícito via Newton com jacobiana numérica esparsa.
-
-    G(u) = u - alpha*dt*F(u) - rhs_hist = 0
-    alpha: 0.5 para CN, 2/3 para BDF2.
-
-    Padrão de esparsidade e coloração cacheados após a primeira detecção.
-    """
     if n not in _cache:
         t_cache = time.time()
         sparsity, colors, n_colors = _detect_sparsity_pattern(funcs, n, eps=eps)
@@ -362,13 +243,8 @@ def newton_step(funcs, u, t_new, dt, n, rhs_hist,
                   f"(||G||={res:.2e}). Usando último iterate.")
     return u_k, max_iter
 
-
-# ---------------------------------------------------------------------------
-# Histórico
-# ---------------------------------------------------------------------------
-
 def make_history(n_funcs, n):
-    """Inicializa a estrutura de histórico."""
+
     use_groups = n_funcs is not None and (n % n_funcs == 0)
     n_elements = (n // n_funcs) if use_groups else n
     final_list = [[] for _ in range(n_funcs)] if use_groups else []
@@ -376,7 +252,6 @@ def make_history(n_funcs, n):
 
 
 def save_to_history(u, final_list, use_groups, n_funcs, n_elements):
-    """Salva o estado atual no histórico."""
     if use_groups:
         u_r = u.reshape((n_funcs, n_elements))
         for j in range(n_funcs):

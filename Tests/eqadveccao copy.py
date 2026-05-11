@@ -11,9 +11,6 @@ import matplotlib.gridspec as gridspec
 from PDES import PDES
 import PDE
 
-# ---------------------------------------------------------------------------
-# Parâmetros
-# ---------------------------------------------------------------------------
 disc_n  = [10, 10]
 nu      = 0.1
 cx, cy  = 1.0, 1.0
@@ -29,9 +26,6 @@ def analitica(X, Y, t):
     return (np.exp(-2 * nu * np.pi**2 * t)
             * np.sin(np.pi * (X - cx * t))
             * np.sin(np.pi * (Y - cy * t)))
-# ---------------------------------------------------------------------------
-# EDP com termo fonte embutido
-# ---------------------------------------------------------------------------
 v = 0
 dax = 10e-5
 
@@ -53,7 +47,6 @@ PDE_D = PDE.PDE(
 
 PDES1 = PDES([PDE_C, PDE_D], disc_n)
 
-# BCs Dirichlet dependentes do tempo — o solver atualiza via d_dt() a cada passo
 bc_expr = "exp(-2*0.1*pi**2*t) * sin(pi*x) * sin(pi*y)"
 PDES1.discretize(
     method="central",
@@ -75,10 +68,6 @@ resultado_final_cn = PDES1.results
 mae_resultado_final_cn = sum(abs(r - p) for r, p in zip(resultado_analitico, resultado_final_cn[0])) / len(resultado_analitico)
 print(mae_resultado_final_cn)
 
-# PDES1.solve(method='bdf2', tf=tf, nt=100, tol=1e-6)
-# resultado_final_bdf2 = PDES1.results
-# mae_resultado_final_bdf2 = sum(abs(r - p) for r, p in zip(resultado_analitico, resultado_final_bdf2[0])) / len(resultado_analitico)
-# print(mae_resultado_final_bdf2)
 
 PDES1.visualize(mode='plot3d', func_idx=0, cmap="RdYlBu_r") # Mostra o calor de F
 PDES1.visualize(mode='plot3d', func_idx=1, cmap="RdYlBu_r") # Mostra o calor de F

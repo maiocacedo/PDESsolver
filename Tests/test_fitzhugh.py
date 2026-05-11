@@ -1,15 +1,3 @@
-"""
-test_fitzhugh.py
-----------------
-Testa o sistema FitzHugh-Nagumo 2D.
-
-Sem solução analítica fechada. Os testes verificam:
-  1. Estabilidade: solução não diverge (valores dentro de [-3, 3])
-  2. Convergência do Newton: solver não lança warnings de divergência
-  3. Assimetria da CI: u deve ter valores positivos e negativos (Heaviside)
-  4. v permanece suave: variação espacial de v menor que a de u
-"""
-
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -21,9 +9,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from PDES import PDES
 import PDE
 
-# ---------------------------------------------------------------------------
-# Parâmetros fixos
-# ---------------------------------------------------------------------------
 DISC_N = [15, 15]
 TF     = 0.2
 NT     = 50
@@ -66,12 +51,7 @@ def resultado():
     return sim
 
 
-# ---------------------------------------------------------------------------
-# Testes
-# ---------------------------------------------------------------------------
-
 def test_estabilidade_u(resultado):
-    """u deve permanecer dentro do intervalo físico [-3, 3]."""
     _, hist = resultado.results
     U_final = np.array(hist[0][-1])
     assert np.all(U_final >= -3.0), f"u < -3: min={U_final.min():.2f}"
@@ -79,7 +59,6 @@ def test_estabilidade_u(resultado):
 
 
 def test_estabilidade_v(resultado):
-    """v deve permanecer dentro do intervalo físico [-2, 2]."""
     _, hist = resultado.results
     V_final = np.array(hist[1][-1])
     assert np.all(V_final >= -2.0), f"v < -2: min={V_final.min():.2f}"
@@ -87,10 +66,6 @@ def test_estabilidade_v(resultado):
 
 
 def test_ci_assimetrica(resultado):
-    """
-    A CI de u é Heaviside — deve ter valores positivos e negativos.
-    Verifica que a CI foi aplicada corretamente.
-    """
     _, hist = resultado.results
     U_ini = np.array(hist[0][0])
     assert U_ini.max() > 0.5,  "CI de u deveria ter valores positivos (Heaviside)"
@@ -98,7 +73,6 @@ def test_ci_assimetrica(resultado):
 
 
 def test_historico_completo(resultado):
-    """Histórico deve ter NT+1 entradas (CI + NT passos)."""
     _, hist = resultado.results
     assert len(hist[0]) == NT + 1, (
         f"Histórico de u tem {len(hist[0])} entradas, esperado {NT + 1}"
@@ -109,7 +83,6 @@ def test_historico_completo(resultado):
 
 
 def test_sem_nan(resultado):
-    """Nenhum valor NaN ou Inf na solução final."""
     _, hist = resultado.results
     U_final = np.array(hist[0][-1])
     V_final = np.array(hist[1][-1])

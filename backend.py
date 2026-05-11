@@ -1,12 +1,3 @@
-"""
-backend.py
-----------
-FastAPI backend para o PDESsolver.
-
-Rodar:
-    pip install fastapi uvicorn python-multipart
-    uvicorn backend:app --reload --port 8000
-"""
 
 import io
 import base64
@@ -33,7 +24,6 @@ from PDES import PDES
 
 app = FastAPI(title='PDESsolver API')
 
-# Cache em memória — guarda o último resultado para re-plotar sem re-rodar
 _cache: dict = {}
 
 app.add_middleware(
@@ -43,12 +33,12 @@ app.add_middleware(
     allow_headers=['*'],
 )
 
-# ── Schemas ───────────────────────────────────────────────────────────────────
+
 
 class PDEConfig(BaseModel):
-    equation: str          # ex: "0.1*d2U/dx2 - 0.5*U"  (lado direito)
-    func:     str          # ex: "U"
-    ic:       str          # ex: "sin(pi*x)"
+    equation: str          
+    func:     str          
+    ic:       str          
     west_bd:  str = 'Dirichlet'
     west_val: str = '0'
     east_bd:  str = 'Neumann'
@@ -61,19 +51,17 @@ class PDEConfig(BaseModel):
 
 class SimRequest(BaseModel):
     pdes:          List[PDEConfig]
-    dimension:     str   = '1D'       # '1D' ou '2D'
+    dimension:     str   = '1D'      
     nx:            int   = 21
     ny:            int   = 21
     tf:            float = 1.0
     nt:            int   = 200
     tol:           float = 1e-6
-    method:        str   = 'bdf2'     # 'bdf2' | 'CN' | 'RKF'
-    disc_method:   str   = 'central'  # 'central' | 'backward' | 'forward'
+    method:        str   = 'bdf2'    
+    disc_method:   str   = 'central' 
     func_idx:      int   = 0
-    plot_mode:     str   = 'final'    # 'final' | 'xt' | 'profiles' | 'heatmap2d' | 'surface2d'
+    plot_mode:     str   = 'final'   
 
-
-# ── Helpers de plot ───────────────────────────────────────────────────────────
 
 def fig_to_b64(fig: Figure) -> str:
     buf = io.BytesIO()
@@ -204,8 +192,6 @@ def plot_2d_surface(hist, funcs, disc_n, func_idx):
     return fig_to_b64(fig)
 
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
-
 @app.get('/')
 def root():
     return {'status': 'PDESsolver API running'}
@@ -282,7 +268,6 @@ class ReplotRequest(BaseModel):
 
 @app.post('/replot')
 def replot(req: ReplotRequest):
-    """Re-gera o plot usando o resultado em cache — sem re-rodar o solver."""
     if not _cache:
         return {'ok': False, 'error': 'Nenhuma simulação em cache. Rode /solve primeiro.'}
     try:
@@ -317,7 +302,6 @@ def replot(req: ReplotRequest):
 
 @app.post('/download_xlsx')
 def download_xlsx(req: SimRequest):
-    """Resolve e retorna os dados como arquivo XLSX em base64."""
     import io
     try:
         import openpyxl
@@ -329,7 +313,6 @@ def download_xlsx(req: SimRequest):
     if not result.get('ok'):
         return result
 
-    # Re-roda para pegar o historico completo
     is2d   = req.dimension == '2D'
     disc_n = [req.nx, req.ny] if is2d else [req.nx]
     pde_list = []
@@ -356,7 +339,6 @@ def download_xlsx(req: SimRequest):
 
     wb = openpyxl.Workbook()
 
-    # Aba de configuração
     ws_cfg = wb.active
     ws_cfg.title = 'Configuração'
     header_font = Font(bold=True, color='FFFFFF')
@@ -380,7 +362,6 @@ def download_xlsx(req: SimRequest):
     ws_cfg.column_dimensions['A'].width = 18
     ws_cfg.column_dimensions['B'].width = 20
 
-    # Uma aba por função — estado final
     nx = req.nx
     ny = req.ny if is2d else 1
     dt = req.tf / req.nt
@@ -392,7 +373,6 @@ def download_xlsx(req: SimRequest):
         ws = wb.create_sheet(title=f'{func_name} — final')
 
         if not is2d:
-            # 1D: linha de cabeçalho com x, depois t vs u
             ws.cell(1, 1, 'x / t')
             for ti, t in enumerate(t_values):
                 cell = ws.cell(1, ti + 2, t)
@@ -403,7 +383,6 @@ def download_xlsx(req: SimRequest):
                 for ti in range(n_passos):
                     ws.cell(xi + 2, ti + 2, round(float(hist[fi][ti][xi]), 8))
         else:
-            # 2D: só estado final reshape
             data = np.array(hist[fi][-1]).reshape(nx, ny)
             ws.cell(1, 1, f'{func_name} (t=tf)')
             for j in range(ny):

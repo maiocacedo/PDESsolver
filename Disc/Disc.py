@@ -3,17 +3,12 @@ import re
 from Auxs.FuncAux import repl_symbol as _repl_symbol
 from .boundaries import get_boundary
 
-# ---------------------------------------------------------------------------
-# Helpers internos
-# ---------------------------------------------------------------------------
-
 def _build_discretized_eqs(
     eqrs: List[str],
     xd_var: List[str],
     str_sp_vars: str,
     method: str,
 ) -> List[str]:
-    """Substitui derivadas parciais pelas aproximações de diferenças finitas."""
 
     SCHEMES = {
         "forward": {
@@ -69,7 +64,6 @@ def _expand_indices(
     n_part: List[int],
     str_sp_vars: str,
 ) -> List[List[str]]:
-    """Expande os índices i e j para os valores reais da malha."""
 
     partial = []
     for eq in eqrs:
@@ -107,7 +101,6 @@ def _expand_indices(
 
 
 def _build_position_labels(n_part, str_sp_vars, n_funcs):
-    """Cria rótulos de posição para cada ponto da malha (interno ou contorno)."""
     positions = []
 
     if len(str_sp_vars) == 2:
@@ -125,11 +118,6 @@ def _build_position_labels(n_part, str_sp_vars, n_funcs):
         positions = [[""] * n_part[0] for _ in range(n_funcs)]
 
     return positions
-
-
-# ---------------------------------------------------------------------------
-# Função principal
-# ---------------------------------------------------------------------------
 
 def df(
     pdes,
@@ -149,18 +137,8 @@ def df(
     north_beta_bd:  str = "1",
     south_beta_bd:  str = "1",
     east_beta_bd:   str = "1",
-) -> Tuple[List[str], List[str]]:
-    """
-    Discretiza um sistema de EDPs por diferenças finitas.
-
-    Retorna
-    -------
-    flat_list_positions : list[str]
-    d_vars : list[str]
-    dirichlet_constraints : dict[int, dict]
-        {idx: {'expr': str, 'x': float, 'y': float}}
-        Coordenadas x, y armazenadas para BCs dependentes de x, y e t.
-    """
+) -> Tuple[List[str], List[str], dict, dict]:
+    
     n_funcs_total = len(pdes.funcs)
 
     def _as_list(val, default="neumann"):
@@ -179,9 +157,6 @@ def df(
     north_func_bd = _as_list(north_func_bd, "0")
     south_func_bd = _as_list(south_func_bd, "0")
 
-    # -----------------------------------------------------------------------
-    # 1. Prepara variáveis e equações
-    # -----------------------------------------------------------------------
     xd_var = pdes.xs(pdes.funcs)
     eqrs = [eq.split("=")[1] for eq in pdes.eqs]
     str_sp_vars = "".join(pdes.sp_vars)
@@ -190,19 +165,11 @@ def df(
         for i, func in enumerate(pdes.funcs):
             eqrs[j] = eqrs[j].replace(str(func), f"{xd_var[i]}{str_sp_vars}")
 
-    # -----------------------------------------------------------------------
-    # 2. Discretiza as derivadas
-    # -----------------------------------------------------------------------
+
     eqrs = _build_discretized_eqs(eqrs, xd_var, str_sp_vars, method)
 
-    # -----------------------------------------------------------------------
-    # 3. Expande índices para todos os pontos internos
-    # -----------------------------------------------------------------------
     list_eq = _expand_indices(eqrs, n_part, str_sp_vars)
 
-    # -----------------------------------------------------------------------
-    # 4. Aplica condições de contorno
-    # -----------------------------------------------------------------------
     n_funcs = len(pdes.funcs)
 
     if len(str_sp_vars) == 2:
@@ -226,9 +193,6 @@ def df(
             east_col = e_bc.apply("east", list_eq, n_part, xd_var, str_sp_vars)[func]
             list_east[func] = [list_south[func][-1]] + east_col + [list_north[func][-1]]
 
-    # -----------------------------------------------------------------------
-    # 5. Monta a lista de posições com rótulos
-    # -----------------------------------------------------------------------
     list_positions = _build_position_labels(n_part, str_sp_vars, n_funcs)
 
     if len(str_sp_vars) == 1:
@@ -262,9 +226,6 @@ def df(
                     list_positions[func][idx] = list_eq[func][C]
                     C += 1
 
-    # -----------------------------------------------------------------------
-    # 6. Define variáveis discretizadas e substitui o passo h
-    # -----------------------------------------------------------------------
     d_vars: List[str] = []
     if len(str_sp_vars) == 2:
         for func in range(n_funcs):
@@ -295,12 +256,8 @@ def df(
     for i in range(len(flat_list_positions)):
         flat_list_positions[i] = _h_pattern.sub(hx_val, flat_list_positions[i])
 
-    # -----------------------------------------------------------------------
-    # 7. Coleta constraints Dirichlet com coordenadas reais de cada nó.
-    #    Formato: {idx: {'expr': str, 'x': float, 'y': float}}
-    #    As coordenadas permitem avaliar BCs do tipo f(x, y, t).
-    # -----------------------------------------------------------------------
     dirichlet_constraints: dict = {}
+    neumann_constraints: dict = {}
     hx = 1.0 / (n_part[0] - 1)
     hy = 1.0 / (n_part[1] - 1) if len(str_sp_vars) == 2 else 1.0
 
@@ -318,21 +275,60 @@ def df(
             'south': south_func_bd,
         }
         Nx, Ny = n_part[0], n_part[1]
+
+        any_neumann = any(
+            sides[s][f].lower() == 'neumann'
+            for s in sides for f in range(n_funcs)
+        )
+        if any_neumann and (Nx < 3 or Ny < 3):
+            raise ValueError(
+                f"Neumann com discretizacao one-sided de 2a ordem exige "
+                f"min(Nx, Ny) >= 3. Recebido: Nx={Nx}, Ny={Ny}."
+            )
+
+        def _idx(func, i, j):
+            return func * Nx * Ny + i * Ny + j
+
         for func in range(n_funcs):
-            offset = func * Nx * Ny
             for i in range(Nx):
                 for j in range(Ny):
-                    idx = offset + i * Ny + j
+                    idx = _idx(func, i, j)
                     side = None
                     if   i == 0:      side = 'west'
                     elif i == Nx - 1: side = 'east'
                     elif j == 0:      side = 'south'
                     elif j == Ny - 1: side = 'north'
-                    if side and sides[side][func].lower() == 'dirichlet':
+                    if side is None:
+                        continue
+                    bc_kind = sides[side][func].lower()
+
+                    if bc_kind == 'dirichlet':
                         dirichlet_constraints[idx] = {
                             'expr': func_exprs[side][func],
                             'x': i * hx,
                             'y': j * hy,
+                        }
+                    elif bc_kind == 'neumann':
+                        if side == 'south':   
+                            n1 = _idx(func, i, 1)
+                            n2 = _idx(func, i, 2)
+                        elif side == 'north':     
+                            n1 = _idx(func, i, Ny - 2)
+                            n2 = _idx(func, i, Ny - 3)
+                        elif side == 'west':      
+                            n1 = _idx(func, 1, j)
+                            n2 = _idx(func, 2, j)
+                        else:                     
+                            n1 = _idx(func, Nx - 2, j)
+                            n2 = _idx(func, Nx - 3, j)
+
+                        neumann_constraints[idx] = {
+                            'expr': func_exprs[side][func],
+                            'x': i * hx,
+                            'y': j * hy,
+                            'side': side,
+                            'idx_n1': n1,
+                            'idx_n2': n2,
                         }
     else:
         Nx = n_part[0]
@@ -344,11 +340,33 @@ def df(
                     'x': 0.0,
                     'y': 0.0,
                 }
+            elif west_bd[func].lower() == 'neumann':
+                if Nx < 3:
+                    raise ValueError("Neumann 1D exige Nx >= 3.")
+                neumann_constraints[offset] = {
+                    'expr': west_func_bd[func],
+                    'x': 0.0,
+                    'y': 0.0,
+                    'side': 'west',
+                    'idx_n1': offset + 1,
+                    'idx_n2': offset + 2,
+                }
             if east_bd[func].lower() == 'dirichlet':
                 dirichlet_constraints[offset + Nx - 1] = {
                     'expr': east_func_bd[func],
                     'x': (Nx - 1) * hx,
                     'y': 0.0,
                 }
+            elif east_bd[func].lower() == 'neumann':
+                if Nx < 3:
+                    raise ValueError("Neumann 1D exige Nx >= 3.")
+                neumann_constraints[offset + Nx - 1] = {
+                    'expr': east_func_bd[func],
+                    'x': (Nx - 1) * hx,
+                    'y': 0.0,
+                    'side': 'east',
+                    'idx_n1': offset + Nx - 2,
+                    'idx_n2': offset + Nx - 3,
+                }
 
-    return flat_list_positions, d_vars, dirichlet_constraints
+    return flat_list_positions, d_vars, dirichlet_constraints, neumann_constraints

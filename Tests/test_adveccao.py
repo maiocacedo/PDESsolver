@@ -1,18 +1,3 @@
-"""
-test_adveccao.py
-----------------
-Testa os 3 solvers na equação de advecção-difusão 2D com fonte.
-
-EDP:
-    ∂U/∂t = -cx·∂U/∂x - cy·∂U/∂y + ν·(∂²U/∂x² + ∂²U/∂y²) + fonte(x,y,t)
-
-Solução analítica exata (onda viajante amortecida):
-    U(x,y,t) = exp(-2·ν·π²·t)·sin(π·(x - cx·t))·sin(π·(y - cy·t))
-
-BCs: Dirichlet dependentes do tempo.
-CI:  sin(π·x)·sin(π·y)
-"""
-
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -23,13 +8,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from PDES import PDES
 import PDE
 
-# ---------------------------------------------------------------------------
-# Parâmetros fixos
-# ---------------------------------------------------------------------------
 DISC_N  = [15, 15]
 TF      = 1.0
 NT      = 200
-TOL_MAE = 1e-2  # Erro espacial O(h^2) com h=1/14 em malha 15x15
+TOL_MAE = 1e-2  
 NU      = 0.1
 CX      = 1.0
 CY      = 1.0
@@ -50,8 +32,6 @@ def mae(numerica, analitica):
 
 
 def montar_sistema():
-    # A solução analítica satisfaz exatamente a EDP sem fonte adicional.
-    # A fonte que estava aqui era incorreta — dobrava o efeito da advecção.
     bc_expr = f"exp(-2*{NU}*pi**2*t)*sin(pi*(x-{CX}*t))*sin(pi*(y-{CY}*t))"
 
     pde = PDE.PDE(
@@ -71,10 +51,6 @@ def montar_sistema():
 
 ref = solucao_analitica(X, Y, TF).flatten()
 
-
-# ---------------------------------------------------------------------------
-# Testes
-# ---------------------------------------------------------------------------
 
 def test_adveccao_bdf2():
     sim = montar_sistema()

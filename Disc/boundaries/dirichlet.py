@@ -1,17 +1,3 @@
-"""
-dirichlet.py
-------------
-Condição de contorno de Dirichlet: u = f(x, y, t).
-
-Nota sobre dependência temporal
---------------------------------
-A expressão bd_func é armazenada com 't' como símbolo livre.
-- CN e BDF2: avaliam 't' no tempo correto via lambdify durante o solve.
-- RKF (SERKF45): também recebe 't' como símbolo e o integra naturalmente.
-
-O uso de d_dt() foi removido — ele derivava a BC em relação a t, o que
-era incorreto para CN/BDF2 e desnecessário para o RKF.
-"""
 
 from typing import List
 from Auxs.FuncAux import repl_symbol as _repl_symbol
@@ -22,7 +8,6 @@ class DirichletBC(BoundaryCondition):
 
     def __init__(self, bd_func: str, use_time_derivative: bool = True):
         super().__init__(bd_func)
-        # use_time_derivative mantido por compatibilidade de assinatura
         self.use_time_derivative = use_time_derivative
 
     def _replace_xy(self, expr: str, X: str, Y: str, str_sp_vars: str) -> str:

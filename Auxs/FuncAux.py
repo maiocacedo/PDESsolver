@@ -11,7 +11,6 @@ def symbol_references(in_list):
         slist.append(e)
     return slist
 
-# Função para calcular a derivada em relação ao tempo 't'
 def d_dt(expr_str: str) -> str:
     t = sp.Symbol('t')
     try:
@@ -21,6 +20,5 @@ def d_dt(expr_str: str) -> str:
         return expr_str
 
 def repl_symbol(expr: str, sym: str, repl: str) -> str:
-    # replace only standalone symbols (no part of identifiers like 'exp', 'max')
     pattern = rf'(?<![A-Za-z0-9_]){sym}(?![A-Za-z0-9_])'
     return re.sub(pattern, repl, expr)
